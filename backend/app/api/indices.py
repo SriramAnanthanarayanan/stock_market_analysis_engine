@@ -194,7 +194,7 @@ def _persist_rrg(s: Services, out: dict[str, Any], bench: str, asof: date | None
 def index_chart(
     request: Request,
     code: str = Query(..., min_length=2, max_length=80),
-    timeframe: Literal["1h", "4h", "1d", "1w"] = "1d",
+    timeframe: Literal["1h", "4h", "1d", "1w", "1mo", "3mo", "6mo", "12mo"] = "1d",
     asof: date | None = None,
 ) -> dict[str, Any]:
     """Index Explorer payload: candles of the official index data, S/R zones, data source."""
@@ -214,13 +214,28 @@ def index_chart(
     first = max(0, n - s.settings.chart_max_candles)
     o, h, l, c, v = (frame[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close", "volume"))
     candles = [{"t": epoch_s(frame.index[i]), "i": i, "o": o[i], "h": h[i], "l": l[i], "c": c[i], "v": None if not np.isfinite(v[i]) else v[i]} for i in range(first, n)]
-    ctx = SeriesContext(it["code"], timeframe, frame, s.cfg)
-    zones = [zone_record(z, ctx) for z in nearest(compute_zones(ctx), s.cfg.sr_display_per_side)]
+    from ..config import MULTI_MONTH_TIMEFRAMES
+
+    multi = timeframe in MULTI_MONTH_TIMEFRAMES
+    if multi:
+        zones = []  # S/R zones are not computed on multi-month candles (not validated)
+    else:
+        ctx = SeriesContext(it["code"], timeframe, frame, s.cfg)
+        zones = [zone_record(z, ctx) for z in nearest(compute_zones(ctx), s.cfg.sr_display_per_side)]
     intraday = timeframe in ("1h", "4h")
     provider = f"yahoo ({it['intraday_ticker']}, verified against official closes)" if intraday else f"{PROVIDER} (official NSE index history)"
     notes = []
     if timeframe == "1w":
         notes.append("Weekly candles are aggregated from completed official daily candles (Monday-labelled NSE weeks); the current week appears once it has closed.")
+    partial = None
+    if multi:
+        from ..data.periods import split_complete
+
+        notes.append("Multi-month candles are aggregated from completed official daily candles; S/R zones are not computed on them. The running period is shown separately as incomplete.")
+        _, part = split_complete(s.indices.frame(it["code"], "1d", cutoff), timeframe, cutoff, s.calendar)
+        if len(part):
+            r = part.iloc[-1]
+            partial = {"t": epoch_s(part.index[-1]), "o": float(r["open"]), "h": float(r["high"]), "l": float(r["low"]), "c": float(r["close"]), "v": float(r["volume"]) if np.isfinite(r["volume"]) else None, "sessions": int(r["source_bars"]), "last_session": r["last_session"].isoformat(), "period_end": None}
     if it["data_status"] != "ok":
         notes.append(f"Data status {it['data_status']}: {it.get('data_status_reason') or ''}")
     return {
@@ -248,6 +263,7 @@ def index_chart(
         },
         "registry": _public(it),
         "notes": notes,
+        "partial_candle": partial,
     }
 
 

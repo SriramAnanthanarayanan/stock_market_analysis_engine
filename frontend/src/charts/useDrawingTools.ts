@@ -1,16 +1,13 @@
 import { useEffect, useRef } from "react";
 import type { IChartApi } from "lightweight-charts";
-import type { Anchor, Drawing, DrawingType } from "../lib/prefs";
-import { newId } from "../lib/prefs";
-import { hitTest, type DrawingPrimitive } from "./drawings";
+import { ANCHOR_COUNT, hitTest, translateDrawing, type Anchor, type Drawing, type DrawingPrimitive, type DrawingType } from "./drawings";
 
 export type DrawTool = "none" | "crosshair" | DrawingType;
-export const TWO_POINT: DrawingType[] = ["trend", "ray", "rect", "fib"];
 
 export interface DrawStyle {
   color: string;
-  width: 1 | 2 | 3;
-  dashed: boolean;
+  width: 1 | 2 | 3 | 4;
+  line_style: "solid" | "dashed" | "dotted";
 }
 
 interface Args {
@@ -22,6 +19,8 @@ interface Args {
   tool: DrawTool;
   style: DrawStyle;
   selectedId: string | null;
+  /** Builds a new drawing (id, symbol, defaults) from the tool and its anchors. */
+  makeDrawing?: (type: DrawingType, anchors: Anchor[], style: DrawStyle) => Drawing;
   onChange?: (d: Drawing[]) => void;
   onSelect?: (id: string | null) => void;
   onToolDone?: () => void;
@@ -29,14 +28,15 @@ interface Args {
 
 type Drag = { id: string; handle: number | null; start: Anchor; startLogical: number; original: Drawing; current: Drawing };
 
-/** Mouse interaction for manual drawings: create (click / click-click), select,
- *  move, resize (handles), Esc to cancel, Delete to remove. Events that hit a
- *  drawing are captured before Lightweight Charts sees them, so dragging a
- *  drawing never pans the chart. */
+/** Mouse interaction for manual drawings: create (one, two or three clicks),
+ *  select, move, move one anchor (handles), Esc to cancel, Delete to remove.
+ *  Events that hit a drawing are captured before Lightweight Charts sees them,
+ *  so dragging a drawing never pans the chart. Esc / Delete that were handled
+ *  here call preventDefault so an enclosing preview does not also close. */
 export function useDrawingTools(a: Args): void {
   const ref = useRef(a);
   ref.current = a;
-  const pending = useRef<Drawing | null>(null);
+  const pending = useRef<{ type: DrawingType; anchors: Anchor[] } | null>(null);
   const drag = useRef<Drag | null>(null);
   const consumed = useRef(false);
 
@@ -59,6 +59,16 @@ export function useDrawingTools(a: Args): void {
       ev.stopPropagation();
       ev.preventDefault();
     };
+    const preview = (anchors: Anchor[]) => {
+      const st = ref.current;
+      const p = pending.current;
+      if (!p || !st.makeDrawing || !anchors.length) return;
+      // Pad with the cursor point so 3-anchor tools can preview after the first click.
+      const need = ANCHOR_COUNT[p.type];
+      const full = anchors.length >= need ? anchors.slice(0, need) : [...anchors, ...Array(need - anchors.length).fill(anchors[anchors.length - 1])];
+      const d = st.makeDrawing(p.type, full, st.style);
+      prim()?.update({ preview: d });
+    };
 
     const onDown = (ev: PointerEvent) => {
       consumed.current = false;
@@ -71,28 +81,23 @@ export function useDrawingTools(a: Args): void {
       const anchor = p.anchorAt(x, y);
       if (!anchor) return;
       const tool = st.tool;
-      if (tool !== "none" && tool !== "crosshair") {
+      if (tool !== "none" && tool !== "crosshair" && st.makeDrawing) {
         consumed.current = true;
         stop(ev);
-        const base = { color: st.style.color, width: st.style.width, dashed: st.style.dashed };
-        if (tool === "hline" || tool === "vline") {
-          const d: Drawing = { id: newId(), type: tool, points: [anchor], ...base };
+        const need = ANCHOR_COUNT[tool];
+        const cur = pending.current && pending.current.type === tool ? pending.current : { type: tool, anchors: [] };
+        const anchors = [...cur.anchors, anchor];
+        if (anchors.length >= need) {
+          pending.current = null;
+          p.update({ preview: null });
+          const d = st.makeDrawing(tool, anchors.slice(0, need), st.style);
           st.onChange?.([...st.drawings, d]);
-          st.onSelect?.(d.id);
+          st.onSelect?.(d.drawing_id);
           st.onToolDone?.();
           return;
         }
-        if (!pending.current) {
-          pending.current = { id: newId(), type: tool, points: [anchor, anchor], ...base };
-          p.update({ preview: pending.current });
-          return;
-        }
-        const d = { ...pending.current, points: [pending.current.points[0], anchor] };
-        pending.current = null;
-        p.update({ preview: null });
-        st.onChange?.([...st.drawings, d]);
-        st.onSelect?.(d.id);
-        st.onToolDone?.();
+        pending.current = { type: tool, anchors };
+        preview([...anchors, anchor]);
         return;
       }
       const m = p.mapper();
@@ -105,7 +110,7 @@ export function useDrawingTools(a: Args): void {
       consumed.current = true;
       stop(ev);
       st.onSelect?.(hit.id);
-      const original = st.drawings.find((d) => d.id === hit.id)!;
+      const original = st.drawings.find((d) => d.drawing_id === hit.id)!;
       const logical = ref.current.chart.current?.timeScale().coordinateToLogical(x) ?? 0;
       drag.current = { id: hit.id, handle: hit.handle, start: anchor, startLogical: Number(logical), original, current: original };
       setScroll(false);
@@ -117,10 +122,7 @@ export function useDrawingTools(a: Args): void {
       const { x, y } = local(ev);
       if (pending.current) {
         const anchor = p.anchorAt(x, y);
-        if (anchor) {
-          pending.current = { ...pending.current, points: [pending.current.points[0], anchor] };
-          p.update({ preview: pending.current });
-        }
+        if (anchor) preview([...pending.current.anchors, anchor]);
         return;
       }
       const dr = drag.current;
@@ -129,22 +131,22 @@ export function useDrawingTools(a: Args): void {
       const logical = ref.current.chart.current?.timeScale().coordinateToLogical(x);
       if (!anchor || logical === null || logical === undefined) return;
       const o = dr.original;
-      let points: Anchor[];
+      let next: Drawing;
       if (dr.handle !== null) {
-        points = o.points.map((q, i) => {
-          if (i !== dr.handle) return q;
-          if (o.type === "hline") return { t: q.t, p: anchor.p };
-          if (o.type === "vline") return { t: anchor.t, p: q.p };
-          return anchor;
-        });
+        next = {
+          ...o,
+          anchors: o.anchors.map((q, i) => {
+            if (i !== dr.handle) return q;
+            if (o.drawing_type === "hline") return { t: q.t, p: anchor.p };
+            if (o.drawing_type === "vline") return { t: anchor.t, p: q.p };
+            return anchor;
+          }),
+        };
       } else {
-        const dl = Number(logical) - dr.startLogical;
-        const dp = anchor.p - dr.start.p;
-        const tm = p.timeMap;
-        points = o.points.map((q) => ({ t: o.type === "hline" ? q.t : tm.timeOf(tm.logicalOf(q.t) + dl), p: o.type === "vline" ? q.p : q.p + dp }));
+        next = translateDrawing(o, p.timeMap, Number(logical) - dr.startLogical, anchor.p - dr.start.p);
       }
-      dr.current = { ...o, points };
-      p.update({ drawings: ref.current.drawings.map((d) => (d.id === dr.id ? dr.current : d)) });
+      dr.current = next;
+      p.update({ drawings: ref.current.drawings.map((d) => (d.drawing_id === dr.id ? next : d)) });
     };
 
     const onUp = () => {
@@ -153,7 +155,7 @@ export function useDrawingTools(a: Args): void {
       drag.current = null;
       setScroll(true);
       const st = ref.current;
-      if (dr.current !== dr.original) st.onChange?.(st.drawings.map((d) => (d.id === dr.id ? dr.current : d)));
+      if (dr.current !== dr.original) st.onChange?.(st.drawings.map((d) => (d.drawing_id === dr.id ? dr.current : d)));
     };
 
     // Lightweight Charts listens to mouse events: swallow the compatibility
@@ -164,17 +166,20 @@ export function useDrawingTools(a: Args): void {
 
     const onKey = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement | null;
-      if (target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
+      if (target && (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName) || target.isContentEditable)) return;
       const st = ref.current;
       if (ev.key === "Escape") {
+        const busy = !!pending.current || !!st.selectedId || (st.tool !== "none" && st.tool !== "crosshair");
         if (pending.current) {
           pending.current = null;
           prim()?.update({ preview: null });
         }
+        if (busy) ev.preventDefault();
         st.onSelect?.(null);
         st.onToolDone?.();
       } else if ((ev.key === "Delete" || ev.key === "Backspace") && st.selectedId) {
-        st.onChange?.(st.drawings.filter((d) => d.id !== st.selectedId));
+        ev.preventDefault();
+        st.onChange?.(st.drawings.filter((d) => d.drawing_id !== st.selectedId));
         st.onSelect?.(null);
       }
     };

@@ -115,49 +115,35 @@ export function loadLayout(): SavedLayout | null {
   return l ? { ...l, prefs: sanitize(l.prefs) } : null;
 }
 
-// ---------------------------------------------------------------- drawings
-export type DrawingType = "hline" | "vline" | "trend" | "ray" | "rect" | "fib";
+// ---------------------------------------------------------------- legacy drawings
+// Before drawings were stored in the database (chart_drawings) they lived only in
+// this browser's localStorage under "pas.drawings.v1:<chart>:<SYMBOL>:<timeframe>".
+// They are imported once into the database (lib/drawingStore.ts) and the keys are
+// kept untouched, so nothing a user drew is ever lost.
 
-export interface Anchor {
-  t: number; // bar start time, epoch seconds (UTC); may lie beyond the last candle
-  p: number; // price
-}
-
-export interface Drawing {
+export interface LegacyDrawing {
   id: string;
-  type: DrawingType;
-  points: Anchor[];
+  type: "hline" | "vline" | "trend" | "ray" | "rect" | "fib";
+  points: { t: number; p: number }[];
   color: string;
   width: 1 | 2 | 3;
   dashed: boolean;
 }
 
-export const drawingKey = (chartId: string, symbol: string, timeframe: string) => `${DRAW_PREFIX}${chartId}:${symbol.toUpperCase()}:${timeframe}`;
+const MIGRATED_KEY = "pas.drawings.migrated.v2";
 
-export function loadDrawings(key: string): Drawing[] {
-  const d = read<Drawing[]>(key);
+function loadLegacy(key: string): LegacyDrawing[] {
+  const d = read<LegacyDrawing[]>(key);
   return Array.isArray(d) ? d.filter((x) => x && typeof x.id === "string" && Array.isArray(x.points)) : [];
 }
 
-export function saveDrawings(key: string, drawings: Drawing[]): boolean {
-  try {
-    if (!drawings.length) {
-      window.localStorage.removeItem(key);
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return write(key, drawings);
-}
-
-/** Every stored drawing set (all symbols/timeframes) for a JSON backup file. */
-export function exportAllDrawings(): Record<string, Drawing[]> {
-  const out: Record<string, Drawing[]> = {};
+/** Every legacy browser drawing set (all symbols/timeframes). */
+export function exportAllDrawings(): Record<string, LegacyDrawing[]> {
+  const out: Record<string, LegacyDrawing[]> = {};
   try {
     for (let i = 0; i < window.localStorage.length; i++) {
       const k = window.localStorage.key(i);
-      if (k && k.startsWith(DRAW_PREFIX)) out[k] = loadDrawings(k);
+      if (k && k.startsWith(DRAW_PREFIX)) out[k] = loadLegacy(k);
     }
   } catch {
     /* storage unavailable */
@@ -165,22 +151,13 @@ export function exportAllDrawings(): Record<string, Drawing[]> {
   return out;
 }
 
-/** Merge a backup file; drawings with an existing id are replaced. Returns the number imported. */
-export function importDrawings(data: unknown): number {
-  if (!data || typeof data !== "object") return 0;
-  let n = 0;
-  for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
-    if (!k.startsWith(DRAW_PREFIX) || !Array.isArray(v)) continue;
-    const current = new Map(loadDrawings(k).map((d) => [d.id, d]));
-    for (const d of v as Drawing[]) {
-      if (d && typeof d.id === "string" && Array.isArray(d.points)) {
-        current.set(d.id, d);
-        n += 1;
-      }
-    }
-    saveDrawings(k, [...current.values()]);
-  }
-  return n;
+export function hasLegacyDrawings(): boolean {
+  if (read<boolean>(MIGRATED_KEY)) return false;
+  return Object.values(exportAllDrawings()).some((x) => x.length > 0);
 }
 
-export const newId = () => `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+export function markLegacyMigrated(): void {
+  write(MIGRATED_KEY, true);
+}
+
+export const newId = () => `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 9)}`;

@@ -312,3 +312,61 @@ export const vcpApi = {
   scan: (q: Q) => request<VcpScanResult>(`/api/scan/vcp${qs(q)}`),
   symbol: (symbol: string, asof?: string | null) => request<VcpSymbol>(`/api/vcp/symbol${qs({ symbol, asof })}`),
 };
+
+// ---------------------------------------------------------------- chart drawings (P3)
+import type { Drawing, DrawingType } from "../charts/drawings";
+
+export interface DrawingTemplate {
+  template_id: string;
+  name: string;
+  drawing_type: DrawingType;
+  scope: "global" | "symbol";
+  symbol: string | null;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export class ConflictError extends Error {
+  current: Drawing | null;
+  constructor(message: string, current: Drawing | null) {
+    super(message);
+    this.current = current;
+  }
+}
+
+async function drawingRequest<T>(path: string, init?: RequestInit & { keepalive?: boolean }): Promise<T> {
+  const res = await fetch(path, { headers: { Accept: "application/json", "Content-Type": "application/json" }, ...init });
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    throw new ConflictError(body?.detail?.message ?? "conflict", body?.detail?.current ?? null);
+  }
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) msg = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {
+      /* keep */
+    }
+    const err = new Error(msg) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+type DrawingBody = Omit<Drawing, "version" | "created_at" | "updated_at" | "origin">;
+
+export const drawingsApi = {
+  list: (instrument: string, symbol: string) => drawingRequest<{ items: Drawing[]; server_time: string }>(`/api/drawings${qs({ instrument, symbol })}`),
+  create: (d: DrawingBody, keepalive = false) => drawingRequest<Drawing>("/api/drawings", { method: "POST", body: JSON.stringify(d), keepalive }),
+  update: (d: DrawingBody, baseVersion: number, keepalive = false) => drawingRequest<Drawing>(`/api/drawings/${encodeURIComponent(d.drawing_id)}`, { method: "PUT", body: JSON.stringify({ ...d, base_version: baseVersion }), keepalive }),
+  remove: (id: string, version: number, keepalive = false) => drawingRequest<void>(`/api/drawings/${encodeURIComponent(id)}${qs({ version })}`, { method: "DELETE", keepalive }),
+  exportUrl: "/api/drawings/export",
+  import: (payload: unknown) => drawingRequest<{ inserted: number; updated: number; skipped: number; invalid: number; errors: string[] }>("/api/drawings/import", { method: "POST", body: JSON.stringify(payload) }),
+  templates: (drawingType?: string, symbol?: string) => drawingRequest<{ items: DrawingTemplate[] }>(`/api/drawing-templates${qs({ drawing_type: drawingType, symbol })}`),
+  saveTemplate: (t: Omit<DrawingTemplate, "created_at" | "updated_at">) => drawingRequest<DrawingTemplate>("/api/drawing-templates", { method: "POST", body: JSON.stringify(t) }),
+  deleteTemplate: (id: string) => drawingRequest<void>(`/api/drawing-templates/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};

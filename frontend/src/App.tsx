@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import { Disclaimer } from "./components/common";
 import { SymbolSearch } from "./components/SymbolSearch";
+import { ChartPreviewHost } from "./components/StockChartPreview";
 import { BreakoutScanner } from "./pages/BreakoutScanner";
 import { CandlestickScanner } from "./pages/CandlestickScanner";
 import { Dashboard } from "./pages/Dashboard";
@@ -38,6 +39,7 @@ const navCls = ({ isActive }: { isActive: boolean }) =>
 
 export default function App() {
   return (
+    <ChartPreviewHost>
     <div className="flex min-h-screen flex-col bg-page">
       <header className="border-b border-line bg-panel/60">
         <div className="flex items-center gap-3 px-4 py-2.5">
@@ -87,5 +89,6 @@ export default function App() {
         <Disclaimer />
       </footer>
     </div>
+    </ChartPreviewHost>
   );
 }

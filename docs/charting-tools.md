@@ -32,19 +32,19 @@ Changing an EMA period, the RSI period or the ATR period re-requests the series 
 | Trend | click start, click end |
 | Ray | click start, click a second point; extends to the right edge |
 | Zone (rectangle / price zone) | click two corners |
-| Fib | click start, click end; levels 0, 0.236, 0.382, 0.5, 0.618, 0.786, 1 (1 = start point, 0 = end point) with prices |
+| Channel | parallel channel: click the two points of the first line, then a point on the parallel line |
+| Fib | Fibonacci retracement: click start (P1), click end (P2); 14 default levels, editable (`docs/fibonacci-tools.md`) |
+| Fib ext | trend-based Fibonacci extension: click P1, P2, P3 |
 | Inspect | crosshair readout: price under the cursor, bar time, % from the last close |
 
-* **Select** a drawing by clicking it in Pan mode (handles appear); **move** by dragging its body; **resize** by dragging a handle; **style**: colour, width, dashed apply to the selected drawing (or to new drawings when none is selected); **delete**: button or Delete/Backspace; **Esc** cancels a half-drawn shape and deselects; **hide/show** all; **clear all** asks for confirmation.
+* **Select** a drawing by clicking it in Pan mode (handles appear); **move** by dragging its body; **resize** by dragging a handle; **style**: colour, width (1-4), solid / dashed / dotted apply to the selected drawing (or to new drawings when none is selected); **Settings** (labels, opacity, extend, fill, anchors, timeframe visibility, Fibonacci levels and templates); **Duplicate**; **Hide** one drawing (Show hidden brings it back); **delete**: button or Delete/Backspace; **Esc** cancels a half-drawn shape and deselects; **hide/show** all; **clear all** asks for confirmation.
 * Anchors are (bar start time, price) - never pixels - so drawings stay in place across zoom, pan, resize, pane changes and reloads. Times between bars interpolate; beyond the last candle they extrapolate with the median bar spacing.
 * A press that hits a drawing is captured before Lightweight Charts sees it, so dragging a drawing never pans the chart; creation tools disable drag-panning while active (wheel zoom stays).
 * Drawings are a separate primitive and separate storage: they never touch backend geometry, detector calculations or S/R zones.
 
 ### Persistence and backup
 
-Drawings are stored in this browser's `localStorage` per chart identity, symbol and timeframe: key `pas.drawings.v1:<chart>:<SYMBOL>:<timeframe>` (chart = `stock` for the stock explorer). Preferences: `pas.chartPrefs.v1`; saved layout: `pas.chartLayout.v1`. Storage failures (private windows, blocked storage) fall back to defaults silently.
-
-**Backup**: *Export drawings* downloads every stored drawing set (all symbols and timeframes) as `chart-drawings.json` (`{"format": "pas-drawings-v1", "drawings": {key: [...]}}`); *Import* merges a backup (same ids are replaced). Clearing browser data deletes drawings that were not exported.
+Drawings are stored in the application database per symbol (all timeframes by default, optional timeframe visibility), saved automatically and versioned; several tabs never overwrite each other's newer edits. *Export drawings* downloads every drawing and template (`pas-drawings-v2`); *Import* restores a backup without overwriting newer data. Drawings that the previous version kept in the browser (`pas.drawings.v1:*` localStorage keys) are imported once and the keys are kept. Details: `docs/chart-drawing-persistence.md`. Preferences (`pas.chartPrefs.v1`) and the saved layout (`pas.chartLayout.v1`) stay in the browser.
 
 ## Verification
 
@@ -52,6 +52,6 @@ Drawings are stored in this browser's `localStorage` per chart identity, symbol 
 
 ## Limitations
 
-* Drawings live in one browser; use Export/Import to move or back them up.
+* Drawings live in the app's database on this computer; use Export/Import to move or back them up.
 * Extrapolated future times for intraday drawings use the median bar spacing, so a drawing beyond the last candle may shift by a bar when new candles arrive.
 * PNG export captures the chart canvas (panes and series), not the HTML legend.

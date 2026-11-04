@@ -34,6 +34,8 @@ export interface ZoneShape {
   fill: string;
   stroke?: string;
   label?: string;
+  /** "right" (default): label right of the zone; "inside": top-left inside it. */
+  labelPos?: "right" | "inside";
 }
 export interface PointShape {
   kind: "point";
@@ -151,11 +153,13 @@ class TopRenderer implements IPrimitivePaneRenderer {
           continue;
         }
         if (s.kind === "zone" && s.label) {
+          const x0 = m.x(s.t0);
           const x1 = m.x(s.t1);
           const y = m.y(s.p1);
           if (x1 !== null && y !== null) {
             ctx.fillStyle = s.stroke ?? "#8B9BA5";
-            ctx.fillText(s.label, x1 + 4, y + 10);
+            if (s.labelPos === "inside" && x0 !== null) ctx.fillText(s.label, Math.min(x0, x1) + 3, y + 11);
+            else ctx.fillText(s.label, x1 + 4, y + 10);
           }
           continue;
         }

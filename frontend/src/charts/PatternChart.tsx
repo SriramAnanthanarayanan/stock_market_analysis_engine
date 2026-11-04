@@ -21,12 +21,12 @@ import type {
   Time,
   UTCTimestamp,
 } from "lightweight-charts";
-import type { Candle, ChartDetection, IndicatorPayload, SRZone, Swing, TechnicalPayload, Timeframe } from "../api/types";
+import type { Candle, ChartDetection, ChartTf, IndicatorPayload, PartialCandle, SRZone, Swing, TechnicalPayload } from "../api/types";
 import { CHART_COLORS as C } from "../lib/status";
 import { fmtBarTime, fmtNum, fmtVolume, isIntraday, tickLabel } from "../lib/format";
-import { DEFAULT_PREFS, type ChartPrefs, type Drawing } from "../lib/prefs";
+import { DEFAULT_PREFS, type ChartPrefs } from "../lib/prefs";
 import { OverlayPrimitive, type OverlayShape } from "./OverlayPrimitive";
-import { DrawingPrimitive, TimeMapper } from "./drawings";
+import { DrawingPrimitive, TimeMapper, type Anchor, type Drawing, type DrawingType } from "./drawings";
 import { useDrawingTools, type DrawStyle, type DrawTool } from "./useDrawingTools";
 import { chartDebug } from "./debug";
 
@@ -79,10 +79,14 @@ export interface PatternChartProps {
   extraShapes?: OverlayShape[];
   /** Extra candle markers (e.g. a scanner event of the row that opened the chart). */
   extraMarkers?: ChartMarker[];
+  /** Without a detection: open the view so this candle time (e.g. a VCP base start) is visible. */
+  focusT?: number | null;
   /** Called when a candle is clicked: its start time and the clicked price. */
   onCandleClick?: (info: { t: number; price: number }) => void;
-  timeframe: Timeframe;
+  timeframe: ChartTf;
   detection: ChartDetection | null;
+  /** Multi-month timeframes: the running period (completed daily candles so far), drawn muted. */
+  partialCandle?: PartialCandle | null;
   swings: Swing[];
   showOverlay: boolean;
   showSwings: boolean;
@@ -97,6 +101,7 @@ export interface PatternChartProps {
   overlayLines?: OverlayLine[];
   drawings?: Drawing[];
   onDrawingsChange?: (d: Drawing[]) => void;
+  makeDrawing?: (type: DrawingType, anchors: Anchor[], style: DrawStyle) => Drawing;
   tool?: DrawTool;
   onToolDone?: () => void;
   drawStyle?: DrawStyle;
@@ -214,6 +219,8 @@ export function PatternChart(props: PatternChartProps) {
   const byTime = useMemo(() => new Map(candles.map((c) => [c.t, c])), [candles]);
   const byTimeRef = useRef(byTime);
   byTimeRef.current = byTime;
+  const partialRef = useRef<PartialCandle | null>(null);
+  partialRef.current = props.partialCandle ?? null;
   const indIndex = useMemo(() => new Map((indicators?.times ?? []).map((t, i) => [t, i])), [indicators]);
   const indRef = useRef({ indicators, indIndex });
   indRef.current = { indicators, indIndex };
@@ -273,7 +280,7 @@ export function PatternChart(props: PatternChartProps) {
     chartDebug.created += 1;
 
     const onMove = (param: MouseEventParams<Time>) => {
-      const c = param.time !== undefined ? byTimeRef.current.get(param.time as number) : undefined;
+      const c = param.time !== undefined ? byTimeRef.current.get(param.time as number) ?? (partialRef.current && partialRef.current.t === param.time ? partialRef.current : undefined) : undefined;
       setLegend(c ? { t: c.t, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v } : null);
       setHoverT(param.time !== undefined ? (param.time as number) : null);
       if (toolRef.current === "crosshair" && param.point && (param.paneIndex ?? 0) === 0) {
@@ -351,25 +358,31 @@ export function PatternChart(props: PatternChartProps) {
   }, [prefs.logScale]);
 
   // ---- candles
+  const partial = props.partialCandle && (!candles.length || props.partialCandle.t > candles[candles.length - 1].t) ? props.partialCandle : null;
   const dataTimes = useMemo(() => {
     const lastT = candles.length ? candles[candles.length - 1].t : -Infinity;
-    return [...candles.map((c) => c.t), ...futureBars.filter((f) => f.t > lastT).map((f) => f.t)];
-  }, [candles, futureBars]);
+    return [...candles.map((c) => c.t), ...(partial ? [partial.t] : []), ...futureBars.filter((f) => f.t > Math.max(lastT, partial?.t ?? -Infinity)).map((f) => f.t)];
+  }, [candles, futureBars, partial]);
   useEffect(() => {
     const series = candleRef.current;
     if (!series) return;
     // Future bars are whitespace: they give projected geometry its true bar
     // spacing on the index-based time scale without inventing candles.
     const lastT = candles.length ? candles[candles.length - 1].t : -Infinity;
+    const muted = "rgba(139,155,165,0.55)";
     series.setData([
       ...candles.map((c) => ({ time: ts(c.t), open: c.o, high: c.h, low: c.l, close: c.c })),
-      ...futureBars.filter((f) => f.t > lastT).map((f) => ({ time: ts(f.t) })),
+      // The running multi-month period: a separate, muted candle (incomplete).
+      ...(partial ? [{ time: ts(partial.t), open: partial.o, high: partial.h, low: partial.l, close: partial.c, color: muted, borderColor: muted, wickColor: muted }] : []),
+      ...futureBars.filter((f) => f.t > Math.max(lastT, partial?.t ?? -Infinity)).map((f) => ({ time: ts(f.t) })),
     ]);
+    chartDebug.partialCandle = !!partial;
     drawRef.current?.update({ timeMap: new TimeMapper(dataTimes) });
     chartDebug.candles = candles.length;
     chartDebug.firstCandleTime = candles[0]?.t ?? null;
     chartDebug.lastCandleTime = candles[candles.length - 1]?.t ?? null;
-  }, [candles, futureBars, dataTimes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candles, futureBars, dataTimes, partial?.t, partial?.c]);
 
   // ---- EMA overlays (backend values only; nothing is computed here)
   const emaKey = JSON.stringify(prefs.emas);
@@ -422,7 +435,10 @@ export function PatternChart(props: PatternChartProps) {
     let pane = 1;
     if (showVolume) {
       next.volume = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false }, pane++);
-      next.volume.setData(candles.map((c) => (c.v === null ? { time: ts(c.t) } : { time: ts(c.t), value: c.v, color: c.c >= c.o ? C.volumeUp : C.volumeDown })));
+      next.volume.setData([
+        ...candles.map((c) => (c.v === null ? { time: ts(c.t) } : { time: ts(c.t), value: c.v, color: c.c >= c.o ? C.volumeUp : C.volumeDown })),
+        ...(partial && partial.v !== null ? [{ time: ts(partial.t), value: partial.v, color: "rgba(139,155,165,0.3)" }] : []),
+      ]);
     }
     if (prefs.showRsi && indicators) {
       const rsi = chart.addSeries(
@@ -470,7 +486,7 @@ export function PatternChart(props: PatternChartProps) {
     chartDebug.rsiLevels = next.rsiLines.length;
     reapplyView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, showVolume, indicators, prefs.showRsi, prefs.showAtr, prefs.rsiOverbought, prefs.rsiOversold, extraKey]);
+  }, [candles, showVolume, indicators, prefs.showRsi, prefs.showAtr, prefs.rsiOverbought, prefs.rsiOversold, extraKey, partial?.t, partial?.v]);
 
   // ---- backend geometry + technical overlays -> line series, markers, primitives
   useEffect(() => {
@@ -655,7 +671,8 @@ export function PatternChart(props: PatternChartProps) {
     drawings,
     visible: prefs.showDrawings,
     tool: props.tool ?? "none",
-    style: props.drawStyle ?? { color: "#19C3DA", width: 2, dashed: false },
+    style: props.drawStyle ?? { color: "#19C3DA", width: 2, line_style: "solid" },
+    makeDrawing: props.makeDrawing,
     selectedId: props.selectedDrawing ?? null,
     onChange: props.onDrawingsChange,
     onSelect: props.onSelectDrawing,
@@ -669,6 +686,10 @@ export function PatternChart(props: PatternChartProps) {
     const n = candles.length;
     let from = Math.max(0, n - 160);
     let to = n + 5;
+    if (!detection && props.focusT) {
+      const fi = candles.findIndex((c) => c.t >= props.focusT!);
+      if (fi >= 0) from = Math.max(0, Math.min(fi - 30, n - 120));
+    }
     if (detection) {
       const geo = detection.geometry;
       const start = candles.findIndex((c) => c.t === geo.formation.start.t);
@@ -681,7 +702,8 @@ export function PatternChart(props: PatternChartProps) {
     userMovedRef.current = false;
     chart.timeScale().setVisibleLogicalRange({ from, to });
     reapplyView();
-  }, [resetKey, detection?.pattern_id, candles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey, detection?.pattern_id, candles, props.focusT]);
 
   useEffect(() => {
     // Fit / Latest are explicit view choices: later series updates must not snap
@@ -699,6 +721,7 @@ export function PatternChart(props: PatternChartProps) {
   }, [props.fitKey]);
 
   const shown = legend ?? (candles.length ? { ...candles[candles.length - 1] } : null);
+  const hoverPartial = partial && (legend?.t === partial.t || (!legend && hoverT === partial.t));
   const li = (() => {
     if (!indicators) return null;
     const t = hoverT ?? indicators.times[indicators.times.length - 1];
@@ -716,6 +739,11 @@ export function PatternChart(props: PatternChartProps) {
           <span className="ml-2">L <span className="text-ink">{fmtNum(shown.l)}</span></span>
           <span className="ml-2">C <span className="text-ink">{fmtNum(shown.c)}</span></span>
           <span className="ml-2">Vol <span className="text-ink">{fmtVolume(shown.v)}</span></span>
+          {hoverPartial && partial && (
+            <span className="ml-2 text-forming" data-testid="partial-legend">
+              incomplete period: {partial.sessions} sessions to {fmtBarTime(partial.last_session, "1d")}
+            </span>
+          )}
           {indicators && li !== null && (
             <div className="mt-0.5 flex flex-wrap gap-x-2" data-testid="indicator-legend">
               {prefs.emas

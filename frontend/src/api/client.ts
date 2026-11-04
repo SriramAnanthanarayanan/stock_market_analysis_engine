@@ -9,6 +9,7 @@ import type {
   BreakoutSignal,
   CandleSignal,
   ChartResponse,
+  ChartTf,
   IndicatorPayload,
   IndicatorRow,
   TechnicalPayload,
@@ -103,8 +104,8 @@ export const api = {
   refresh: (body: { universe: Universe; timeframe: Timeframe; asof?: string | null; patterns?: string[] | null; full_refresh?: boolean }) =>
     request<RefreshResponse>("/api/scan/refresh", post(body)),
   overview: (universe: Universe, asof?: string | null) => request<OverviewResponse>(`/api/overview${qs({ universe, asof })}`),
-  chart: (symbol: string, timeframe: Timeframe, patternId?: string | null, asof?: string | null) =>
-    request<ChartResponse>(`/api/chart${qs({ symbol, timeframe, pattern_id: patternId, asof })}`),
+  chart: (symbol: string, timeframe: ChartTf, patternId?: string | null, asof?: string | null, maxCandles?: number | null) =>
+    request<ChartResponse>(`/api/chart${qs({ symbol, timeframe, pattern_id: patternId, asof, max_candles: maxCandles })}`),
   history: (symbol: string, limit = 50) => request<{ count: number; items: Match[]; note: string }>(`/api/history${qs({ symbol, limit })}`),
   // P3 ---------------------------------------------------------------
   labels: (q: { symbol?: string; timeframe?: Timeframe } = {}) => request<Label[]>(`/api/labels${qs(q)}`),
@@ -122,9 +123,9 @@ export const api = {
     request<SweepResult>("/api/evaluation/sweep", post({ options, param, values, labels: clean(labels) })),
   runs: () => request<{ run_id: string; created_at: string; kind: string; config_version: string; label_count: number; overrides: unknown }[]>("/api/evaluation/runs"),
   // E1 ---------------------------------------------------------------
-  indicators: (q: { symbol: string; timeframe: Timeframe; asof?: string | null; scan_id?: string | null; start_t?: number; ema?: string; rsi_period?: number; atr_period?: number; instrument?: string }) =>
+  indicators: (q: { symbol: string; timeframe: ChartTf; asof?: string | null; scan_id?: string | null; start_t?: number; ema?: string; rsi_period?: number; atr_period?: number; instrument?: string }) =>
     request<IndicatorPayload>(`/api/indicators${qs(q)}`),
-  technical: (q: { symbol: string; timeframe: Timeframe; asof?: string | null; scan_id?: string | null; start_t?: number; confirm?: number; instrument?: string }) =>
+  technical: (q: { symbol: string; timeframe: ChartTf; asof?: string | null; scan_id?: string | null; start_t?: number; confirm?: number; instrument?: string }) =>
     request<TechnicalPayload>(`/api/technical${qs(q)}`),
   scanCandlesticks: (q: Record<string, string | number | boolean | null | undefined>) => request<TechScanResult<CandleSignal>>(`/api/scan/candlesticks${qs(q)}`),
   scanBreakouts: (q: Record<string, string | number | boolean | null | undefined>) => request<TechScanResult<BreakoutSignal>>(`/api/scan/breakouts${qs(q)}`),
@@ -136,7 +137,7 @@ export const api = {
   indexStatus: () => request<Record<string, unknown>>("/api/indices/status"),
   refreshIndices: () => request<Record<string, unknown>>("/api/indices/refresh", post({ force: false, intraday: true })),
   indexOverview: (q: { timeframe: "1d" | "1w"; benchmark?: string; asof?: string | null; codes?: string }) => request<IndexOverview>(`/api/indices/overview${qs(q)}`),
-  indexChart: (code: string, timeframe: Timeframe, asof?: string | null) => request<IndexChart>(`/api/index/chart${qs({ code, timeframe, asof })}`),
+  indexChart: (code: string, timeframe: ChartTf, asof?: string | null) => request<IndexChart>(`/api/index/chart${qs({ code, timeframe, asof })}`),
   rrg: (q: { benchmark?: string; asof?: string | null; trail?: number; codes?: string; category?: string }) => request<RRGResult>(`/api/rrg${qs(q)}`),
   // E3 ---------------------------------------------------------------
   stage: (q: Record<string, string | number | null | undefined>) => request<StageList>(`/api/stage${qs(q)}`),

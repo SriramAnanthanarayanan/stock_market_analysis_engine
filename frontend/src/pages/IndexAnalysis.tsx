@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { SymbolButton, useOpenChart } from "../lib/openChart";
 import { api } from "../api/client";
 import type { IndexOverview, IndexOverviewRow } from "../api/types";
 import { ErrorNote } from "../components/common";
@@ -11,7 +12,8 @@ const pct = (v: number | null | undefined) => (v === null || v === undefined ? <
 const QCOL: Record<string, string> = { leading: "text-validated", weakening: "text-forming", lagging: "text-down", improving: "text-accent" };
 
 export function IndexAnalysis() {
-  const navigate = useNavigate();
+  const openChart = useOpenChart();
+  const openIndex = (r: IndexOverviewRow) => r.analysis_enabled && openChart({ symbol: r.code, instrument: "index", timeframe: "1d", context: { title: r.name, lines: [{ k: "Code", v: r.code }, { k: "Category", v: r.category_label ?? r.category }] } });
   const [params, setParams] = useSearchParams();
   const tf = (params.get("tf") as "1d" | "1w") || "1d";
   const benchmark = params.get("bench") ?? "NIFTY 500";
@@ -62,7 +64,7 @@ export function IndexAnalysis() {
     return true;
   });
   const cols: Column<IndexOverviewRow>[] = [
-    { key: "name", label: "Index", render: (r) => <span className="font-medium text-ink" title={r.code}>{r.name}</span>, sort: (r) => r.name },
+    { key: "name", label: "Index", render: (r) => (r.analysis_enabled ? <SymbolButton symbol={r.name} onOpen={() => openIndex(r)} /> : <span className="font-medium text-ink" title={r.code}>{r.name}</span>), sort: (r) => r.name },
     { key: "cat", label: "Category", render: (r) => <span className="text-muted">{r.category_label}{r.subcategory ? ` · ${humanize(r.subcategory)}` : ""}</span>, sort: (r) => `${r.category}${r.subcategory}` },
     { key: "close", label: "Latest close", align: "right", render: (r) => (r.latest_close !== undefined ? fmtNum(r.latest_close) : <span className="text-muted" title={r.data_status_reason ?? ""}>{r.analysis_enabled ? r.data_status : humanize(r.index_type)}</span>), sort: (r) => r.latest_close ?? null },
     ...(data?.return_horizons ?? ["1W", "1M", "3M", "6M", "1Y"]).map(
@@ -170,7 +172,7 @@ export function IndexAnalysis() {
         </div>
       </div>
       {error && <ErrorNote message={error} />}
-      <DataTable rows={rows} columns={cols} testid="index-table" onRow={(r) => r.analysis_enabled && navigate(`/index/${encodeURIComponent(r.code)}?tf=1d`)} empty="No index matches these filters." initialSort={{ key: "rs", desc: true }} pageSize={60} />
+      <DataTable rows={rows} columns={cols} testid="index-table" onRow={(r) => openIndex(r)} empty="No index matches these filters." initialSort={{ key: "rs", desc: true }} pageSize={60} />
       <ul className="text-[11px] text-muted">
         {data?.notes.map((n) => <li key={n}>{n}</li>)}
         <li>Stage Analysis per index arrives with E3. Latest data: {fmtDate(data?.items.find((r) => r.latest_date)?.latest_date)}.</li>

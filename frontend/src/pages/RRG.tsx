@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { useOpenChart } from "../lib/openChart";
 import { api } from "../api/client";
 import type { RRGResult } from "../api/types";
 import { ErrorNote, Panel } from "../components/common";
@@ -15,7 +16,7 @@ const CATS: [string, string][] = [
 ];
 
 export function RRG() {
-  const navigate = useNavigate();
+  const openChart = useOpenChart();
   const [params, setParams] = useSearchParams();
   const benchmark = params.get("bench") ?? "NIFTY 500";
   const trail = Number(params.get("trail") ?? 12);
@@ -103,7 +104,7 @@ export function RRG() {
       {error && <ErrorNote message={error} />}
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_330px]">
         <div className="panel p-2">
-          {data && <RRGChart items={visible} color={(c) => colorMap.get(c) ?? "#19C3DA"} center={data.params.center} onSelect={(code) => navigate(`/index/${encodeURIComponent(code)}?tf=1w`)} />}
+          {data && <RRGChart items={visible} color={(c) => colorMap.get(c) ?? "#19C3DA"} center={data.params.center} onSelect={(code) => openChart({ symbol: code, instrument: "index", timeframe: "1w" })} />}
           {data && (
             <div className="px-2 pb-1 text-[11px] text-muted" data-testid="rrg-meta">
               Benchmark {data.benchmark_name} · latest completed week {fmtDate(data.benchmark_last_week)} · RS-Ratio = 100 x RS / EMA(RS, {data.params.rs_period}w) · RS-Momentum = 100 x RS-Ratio / EMA(RS-Ratio, {data.params.momentum_period}w) · {data.data_basis} · config v{data.config_version}
@@ -119,7 +120,7 @@ export function RRG() {
                   <li key={it.code} className="flex items-center gap-2">
                     <input type="checkbox" checked={!hidden.has(it.code)} onChange={() => toggle(it.code)} data-testid="rrg-toggle" data-code={it.code} />
                     <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: colorMap.get(it.code) }} />
-                    <button className={`flex-1 truncate text-left ${on ? "text-ink" : "text-muted"} hover:underline`} onClick={() => navigate(`/index/${encodeURIComponent(it.code)}?tf=1w`)} title={it.name}>
+                    <button className={`flex-1 truncate text-left ${on ? "text-ink" : "text-muted"} hover:underline`} onClick={() => openChart({ symbol: it.code, instrument: "index", timeframe: "1w" })} title={it.name}>
                       {it.name}
                     </button>
                     <span className="text-[10px] text-muted">{it.latest?.quadrant}</span>

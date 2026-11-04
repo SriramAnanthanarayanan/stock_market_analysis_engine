@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { useOpenChart } from "../lib/openChart";
+import { fmtBarTime } from "../lib/format";
 import { api, exportUrl } from "../api/client";
 import type { HealthResponse, Match, OverviewResponse, PatternInfo, ScanResponse, ScanSummary, Timeframe, Universe } from "../api/types";
 import { ErrorNote } from "../components/common";
@@ -11,7 +13,7 @@ const ACTIVE = new Set(["queued", "running"]);
 
 export function Dashboard() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
+  const openChart = useOpenChart();
   const universe = (params.get("u") as Universe) || "nifty500";
   const timeframe = (params.get("tf") as Timeframe) || "1d";
   const asof = params.get("asof") || "";
@@ -130,11 +132,22 @@ export function Dashboard() {
     );
   }, [scan, filters.fno, filters.search]);
 
-  const open = (m: Match) => {
-    const qs = new URLSearchParams({ tf: m.timeframe, pattern_id: m.pattern_id });
-    if (asof) qs.set("asof", asof);
-    navigate(`/explorer/${encodeURIComponent(m.symbol)}?${qs.toString()}`, { state: { from: `/?${params.toString()}` } });
-  };
+  const open = (m: Match) =>
+    openChart({
+      symbol: m.symbol,
+      timeframe: m.timeframe,
+      patternId: m.pattern_id,
+      asof: asof || null,
+      context: {
+        title: `${m.pattern_name} - ${m.status_label}`,
+        lines: [
+          { k: "Quality (fit, not a probability)", v: `${m.quality.toFixed(0)} (${m.quality_label})` },
+          { k: "Formation", v: `${fmtBarTime(m.formation_start, m.timeframe)} - ${fmtBarTime(m.formation_end, m.timeframe)}` },
+          { k: "Bars / touches", v: `${m.formation_length} / ${m.upper_touches ?? "-"} up, ${m.lower_touches ?? "-"} low` },
+          { k: "Latest close", v: String(m.last_close ?? "-") },
+        ],
+      },
+    });
 
   const warnings = [...(scan?.scan?.warnings ?? []), ...(scan?.note ? [scan.note] : [])];
   const noScan = !loading && !scan?.scan && !active;

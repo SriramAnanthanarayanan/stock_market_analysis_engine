@@ -51,6 +51,7 @@ export function VcpScanner() {
       symbol: r.symbol,
       timeframe: "1d",
       asof: asof || null,
+      show: ["vcp"],
       context: {
         title: `VCP - ${r.status_label}`,
         vcp: true,

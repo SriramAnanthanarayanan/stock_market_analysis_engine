@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from .. import database as db
-from ..config import TIMEFRAME_SOURCE_INTERVAL
+from ..config import CHART_SOURCE_INTERVAL, DETECTOR_TIMEFRAMES, MULTI_MONTH_TIMEFRAMES
 from ..data.ohlcv import prepare_series
 from ..indicators import swing_points
 from ..patterns.base import SPEC_BY_SLUG, SeriesContext
@@ -163,7 +163,32 @@ def _clean(v: Any) -> Any:
     return v
 
 
-def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None, asof: date | None) -> dict[str, Any]:
+def detector_support(timeframe: str) -> dict[str, bool]:
+    return {name: timeframe in tfs for name, tfs in DETECTOR_TIMEFRAMES.items()}
+
+
+MULTI_MONTH_NOTE = (
+    "Multi-month candles are aggregated from completed daily candles (calendar month / quarter / half-year / year). "
+    "Price-action patterns, S/R zones, candlestick and breakout scanners are not run on this timeframe (not validated here); "
+    "EMA/RSI/ATR are formulas on completed candles and are shown unvalidated."
+)
+
+
+def _performance(s: Services, symbol: str, timeframe: str, frame, cutoff) -> dict[str, Any] | None:
+    from ..data.periods import performance_horizons
+
+    try:
+        if timeframe == "1d":
+            return performance_horizons(frame)
+        raw = s.store.load_current(symbol, "1d")
+        if raw is None or raw.empty:
+            return None
+        return performance_horizons(prepare_series(raw, symbol, "1d", cutoff, s.calendar).frame)
+    except Exception:  # supporting information only
+        return None
+
+
+def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None, asof: date | None, max_candles: int | None = None) -> dict[str, Any]:
     symbol = symbol.strip().upper()
     stock = s.universe.stock(symbol)
     if stock is None:
@@ -181,10 +206,13 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
             )
         scan = get_scan(s.engine, det["scan_id"])
         asof = date.fromisoformat(scan["asof"]) if scan and scan.get("asof") else None
+    elif timeframe in MULTI_MONTH_TIMEFRAMES:
+        scan = None  # chart-only timeframe: never scanned
     else:
         scan = _scan_for_symbol(s, symbol, timeframe, asof)
+    multi = timeframe in MULTI_MONTH_TIMEFRAMES
 
-    interval = TIMEFRAME_SOURCE_INTERVAL[timeframe]
+    interval = CHART_SOURCE_INTERVAL[timeframe]
     cutoff = parse_iso(scan["data_cutoff"]) if scan and scan.get("data_cutoff") else asof_cutoff(asof)
     raw = s.store.load_current(symbol, interval)
     if raw is None or s.market_data.needs_backfill(s.store.meta(symbol, interval), interval):
@@ -198,7 +226,7 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
     ps = prepare_series(raw, symbol, timeframe, cutoff, s.calendar)
     frame = ps.frame
     n = len(frame)
-    if n == 0:
+    if n == 0 and not (multi and ps.partial is not None and len(ps.partial)):
         raise HTTPException(status_code=404, detail=f"no completed {timeframe} candles for {symbol} at the cutoff")
     times = frame.index
     newer = len(prepare_series(raw, symbol, timeframe, asof_cutoff(asof), s.calendar).frame) > n
@@ -229,6 +257,9 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
                 f"This scan was computed on {scan.get('price_basis')} prices; the candles are now {s.store.price_basis}. "
                 "Its geometry is not comparable with these candles - re-run the scan."
             )
+    elif multi:
+        source = "adhoc"
+        notes.append(MULTI_MONTH_NOTE)
     else:
         source = "adhoc"
         notes.append("No stored scan covers this symbol/timeframe/date; detections were computed on demand and are not persisted.")
@@ -261,7 +292,8 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
     selected = pattern_id or (next((d["pattern_id"] for d in detections if d["status"] != "developing"), None) or (detections[0]["pattern_id"] if detections else None))
     max_len = max((d["formation_length"] for d in detections), default=0)
     earliest = min((d["geometry"]["formation"]["start"]["i"] for d in detections), default=n)
-    count = max(s.settings.chart_min_candles, max_len + s.settings.chart_context_bars, min(n, s.settings.chart_max_candles))
+    cap = s.settings.chart_max_candles if max_candles is None else min(max_candles, s.settings.chart_max_candles)
+    count = max(s.settings.chart_min_candles, max_len + s.settings.chart_context_bars, min(n, cap))
     first = max(0, min(n - count, earliest - s.settings.chart_context_bars))
 
     o, h, l, c, v = (frame[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close", "volume"))
@@ -282,12 +314,16 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
         future = [{"i": last_i + k, "t": proj.get(last_i + k, epoch_s(cal[k - 1]))} for k in range(1, extra + 1)]
 
     k = s.cfg.swing_k_structure
-    sp = swing_points(h, l, k)
-    swings = [{"t": epoch_s(times[i]), "i": int(i), "p": float(h[i]), "kind": "high"} for i in sp.highs if i >= first]
-    swings += [{"t": epoch_s(times[i]), "i": int(i), "p": float(l[i]), "kind": "low"} for i in sp.lows if i >= first]
-    swings.sort(key=lambda x: (x["i"], x["kind"]))
+    swings: list[dict[str, Any]] = []
+    if not multi:
+        sp = swing_points(h, l, k)
+        swings = [{"t": epoch_s(times[i]), "i": int(i), "p": float(h[i]), "kind": "high"} for i in sp.highs if i >= first]
+        swings += [{"t": epoch_s(times[i]), "i": int(i), "p": float(l[i]), "kind": "low"} for i in sp.lows if i >= first]
+        swings.sort(key=lambda x: (x["i"], x["kind"]))
 
-    if scan is not None:
+    if multi:
+        zones = []
+    elif scan is not None:
         zones = zones_for(s.engine, scan["scan_id"], symbol)
     else:
         zctx = SeriesContext(symbol, timeframe, frame, s.cfg)
@@ -314,4 +350,23 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
         "newer_data_available": bool(newer),
         "notes": notes,
         "data_source": data_source(s, frame, scan),
+        "partial_candle": partial_candle(ps, s) if multi else None,
+        "performance": _performance(s, symbol, timeframe, frame, cutoff),
+        "detector_support": detector_support(timeframe),
+        "candles_total": n,
     }
+
+
+def partial_candle(ps, s: Services) -> dict[str, Any] | None:
+    """The running multi-month period built from completed daily candles (display only)."""
+    from ..config import MULTI_MONTH_MONTHS
+    from ..data.periods import period_bar_ends
+
+    part = ps.partial
+    if part is None or part.empty:
+        return None
+    r = part.iloc[-1]
+    ts = part.index[-1]
+    end = period_bar_ends(part.index[-1:], MULTI_MONTH_MONTHS[ps.timeframe], s.calendar)[0]
+    vol = float(r["volume"]) if np.isfinite(r["volume"]) else None
+    return {"t": epoch_s(ts), "o": float(r["open"]), "h": float(r["high"]), "l": float(r["low"]), "c": float(r["close"]), "v": vol, "sessions": int(r["source_bars"]), "last_session": r["last_session"].isoformat() if r["last_session"] is not None else None, "period_end": end.isoformat()}

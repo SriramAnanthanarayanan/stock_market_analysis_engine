@@ -22,9 +22,9 @@ const check = (name, ok, detail = "") => {
 const dbg = (page) => page.evaluate(() => ({ ...window.__pasChart }));
 
 async function launch() {
-  for (const channel of ["msedge", "chrome"]) {
+  for (const opt of [...(process.env.PW_EXECUTABLE ? [{ executablePath: process.env.PW_EXECUTABLE }] : []), { channel: "msedge" }, { channel: "chrome" }]) {
     try {
-      return await chromium.launch({ channel, headless: true });
+      return await chromium.launch({ ...opt, headless: true });
     } catch {
       /* try next */
     }
@@ -72,6 +72,8 @@ try {
   const symbol = await row.getAttribute("data-symbol");
   const pattern = await row.getAttribute("data-pattern");
   await row.click();
+  await page.waitForSelector('[data-testid="chart-preview"]');
+  await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/\/explorer\//);
   await page.waitForFunction(() => window.__pasChart && window.__pasChart.candles > 0 && window.__pasChart.lineSeries > 0, null, { timeout: 30000 });
   await page.waitForTimeout(500);

@@ -19,10 +19,10 @@ from sqlalchemy import and_, select
 from .. import database as db
 from ..breakouts import breakout_events, daily_reference
 from ..candlesticks import marubozu_events
-from ..config import TECH_PARAM_META, TIMEFRAME_SOURCE_INTERVAL, config_hash, describe_config
+from ..config import CHART_SOURCE_INTERVAL, MULTI_MONTH_TIMEFRAMES, TECH_PARAM_META, config_hash, describe_config
 from ..data.ohlcv import prepare_series
 from ..indicators.divergence import find_divergences
-from ..models import Timeframe, Universe
+from ..models import ChartTimeframe, Timeframe, Universe
 from ..scanner import find_latest_scan, get_scan
 from ..services import Services
 from ..technical import _crosses, analyze, divergence_record, indicator_series
@@ -86,7 +86,7 @@ def load_frame(s: Services, symbol: str, timeframe: str, cutoff, instrument: str
     symbol = symbol.strip().upper()
     if s.universe.stock(symbol) is None:
         raise HTTPException(status_code=404, detail=f"unknown symbol {symbol!r} (not in the NIFTY 500 / F&O universe)")
-    interval = TIMEFRAME_SOURCE_INTERVAL[timeframe]
+    interval = CHART_SOURCE_INTERVAL[timeframe]
     raw = s.store.load_current(symbol, interval)
     if raw is None:
         s.market_data.ensure([symbol], interval, cutoff=cutoff)
@@ -141,7 +141,7 @@ def _meta(s: Services, symbol: str, timeframe: str, frame, cutoff, scan, instrum
 def indicators(
     request: Request,
     symbol: str = SYMBOL,
-    timeframe: Timeframe = "1d",
+    timeframe: ChartTimeframe = "1d",
     asof: date | None = None,
     scan_id: str | None = Query(None, max_length=120),
     start_t: int | None = Query(None, ge=0),
@@ -187,6 +187,7 @@ def indicators(
             "rsi": status(ser["rsi"], ser["rsi_period"] + 1),
             "atr": status(atr, ser["atr_period"]),
         },
+        "validated_timeframe": timeframe not in MULTI_MONTH_TIMEFRAMES,
         "params": {
             "ema_periods": list(periods),
             "ema_seed": tcfg.ema_seed,
@@ -203,7 +204,7 @@ def indicators(
 def technical_overlays(
     request: Request,
     symbol: str = SYMBOL,
-    timeframe: Timeframe = "1d",
+    timeframe: ChartTimeframe = "1d",
     asof: date | None = None,
     scan_id: str | None = Query(None, max_length=120),
     start_t: int | None = Query(None, ge=0),
@@ -221,9 +222,14 @@ def technical_overlays(
     ser = indicator_series(frame, tcfg, cache_key=(instrument, symbol, timeframe, s.store.price_basis))
     n = len(frame)
     res = analyze(frame, timeframe, tcfg, s.cfg, with_sr=False)
-    maru = marubozu_events(frame, ser["atr"], tcfg, timeframe, since=start)
-    divs = [divergence_record(d, frame.index, n) for d in find_divergences(frame["high"], frame["low"], frame["close"], ser["rsi"], ser["atr"], tcfg) if d.p1.i >= start]
-    crosses = _crosses(ser["ema"], tcfg.ema_cross_pairs, frame.index, start)
+    multi = timeframe in MULTI_MONTH_TIMEFRAMES
+    if multi:
+        # Candlestick / divergence / crossover scanners are not run on multi-month candles.
+        maru, divs, crosses = [], [], []
+    else:
+        maru = marubozu_events(frame, ser["atr"], tcfg, timeframe, since=start)
+        divs = [divergence_record(d, frame.index, n) for d in find_divergences(frame["high"], frame["low"], frame["close"], ser["rsi"], ser["atr"], tcfg) if d.p1.i >= start]
+        crosses = _crosses(ser["ema"], tcfg.ema_cross_pairs, frame.index, start)
 
     # N-day levels always come from completed DAILY candles as of the same cutoff.
     daily: dict[str, Any] = {"status": "ok", "levels": {}, "breakouts": [], "confirm_closes": confirm}
@@ -254,7 +260,7 @@ def technical_overlays(
         "divergences": divs,
         "ema_crosses": crosses,
         "daily": daily,
-        "notes": [
+        "notes": ([f"{timeframe}: Marubozu, divergence and crossover scanners are not run on multi-month candles (not validated); levels are daily-derived."] if multi else []) + [
             "Marubozu: body >= {:.0%} of range, each wick <= {:.0%} (raw OHLC, completed candles).".format(tcfg.marubozu_min_body_ratio, tcfg.marubozu_max_upper_wick_ratio),
             "N-day levels use the previous N completed daily candles; on 1H/4H charts they are daily-derived reference levels, not N-bar levels.",
             "Divergence pivots are confirmed swing points (k={}); a divergence is confirmed only at P2 + k.".format(tcfg.div_swing_k),

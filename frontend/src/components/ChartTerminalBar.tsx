@@ -1,17 +1,33 @@
 import { useRef, useState } from "react";
 import type { DrawStyle, DrawTool } from "../charts/useDrawingTools";
-import { DEFAULT_EMAS, DEFAULT_PREFS, type ChartPrefs, type Drawing } from "../lib/prefs";
+import type { Drawing } from "../charts/drawings";
+import type { SaveState } from "../lib/drawingStore";
+import { DEFAULT_EMAS, DEFAULT_PREFS, newId, type ChartPrefs } from "../lib/prefs";
+import { DrawingSettingsPanel } from "./DrawingSettingsPanel";
 
 const TOOLS: { id: DrawTool; label: string; title: string }[] = [
-  { id: "none", label: "Pan", title: "Pan / select drawings (drag a drawing to move it, drag a handle to resize)" },
+  { id: "none", label: "Pan", title: "Pan / select drawings (drag a drawing to move it, drag a handle to move one anchor)" },
   { id: "crosshair", label: "Inspect", title: "Crosshair inspection: price and time under the cursor" },
   { id: "hline", label: "H-line", title: "Horizontal line (one click)" },
   { id: "trend", label: "Trend", title: "Trendline (click start, click end)" },
   { id: "ray", label: "Ray", title: "Ray extending to the right (click start, click direction)" },
-  { id: "rect", label: "Zone", title: "Rectangle / price zone (click two corners)" },
+  { id: "rect", label: "Zone", title: "Rectangle / support or resistance zone (click two corners)" },
+  { id: "channel", label: "Channel", title: "Parallel channel (click the two points of the first line, then a point on the parallel line)" },
   { id: "vline", label: "V-line", title: "Vertical line (one click)" },
-  { id: "fib", label: "Fib", title: "Fibonacci retracement (click start, click end; 1 = start, 0 = end)" },
+  { id: "fib_retracement", label: "Fib", title: "Fibonacci retracement: click the start (P1) and end (P2) of the move; 0 at P2, 1 at P1" },
+  { id: "fib_extension", label: "Fib ext", title: "Trend-based Fibonacci extension: click P1, P2 (the move) and P3 (end of the retracement); 1.0 = the P1-P2 move projected from P3" },
 ];
+
+const SAVE_LABEL: Record<SaveState, string> = { loading: "Loading drawings...", saved: "All drawings saved", saving: "Saving...", unsaved: "Unsaved changes", error: "Save failed - retrying", offline: "Drawings offline" };
+
+export interface DrawingStoreApi {
+  state: SaveState;
+  message: string | null;
+  all: Drawing[];
+  patch: (id: string, change: Partial<Drawing>) => void;
+  add: (d: Drawing) => void;
+  saveNow: () => Promise<void>;
+}
 
 interface Props {
   prefs: ChartPrefs;
@@ -22,6 +38,8 @@ interface Props {
   setDrawStyle: (s: DrawStyle) => void;
   drawings: Drawing[];
   setDrawings: (d: Drawing[]) => void;
+  store?: DrawingStoreApi;
+  timeframe?: string;
   selectedDrawing: string | null;
   setSelectedDrawing: (id: string | null) => void;
   onFit: () => void;
@@ -41,12 +59,19 @@ export function ChartTerminalBar(p: Props) {
   const { prefs, setPrefs } = p;
   const set = (patch: Partial<ChartPrefs>) => setPrefs({ ...prefs, ...patch });
   const setEma = (i: number, patch: Partial<ChartPrefs["emas"][number]>) => setPrefs({ ...prefs, emas: prefs.emas.map((e, j) => (j === i ? { ...e, ...patch } : e)) });
-  const sel = p.drawings.find((d) => d.id === p.selectedDrawing) ?? null;
-  const style: DrawStyle = sel ? { color: sel.color, width: sel.width, dashed: sel.dashed } : p.drawStyle;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const sel = p.drawings.find((d) => d.drawing_id === p.selectedDrawing) ?? null;
+  const style: DrawStyle = sel ? { color: sel.color, width: Math.max(1, Math.min(4, sel.line_width)) as DrawStyle["width"], line_style: sel.line_style } : p.drawStyle;
   const applyStyle = (patch: Partial<DrawStyle>) => {
-    if (sel) p.setDrawings(p.drawings.map((d) => (d.id === sel.id ? { ...d, ...patch } : d)));
-    else p.setDrawStyle({ ...p.drawStyle, ...patch });
+    if (sel) {
+      const change: Partial<Drawing> = {};
+      if (patch.color !== undefined) change.color = patch.color;
+      if (patch.width !== undefined) change.line_width = patch.width;
+      if (patch.line_style !== undefined) change.line_style = patch.line_style;
+      p.setDrawings(p.drawings.map((d) => (d.drawing_id === sel.drawing_id ? { ...d, ...change } : d)));
+    } else p.setDrawStyle({ ...p.drawStyle, ...patch });
   };
+  const hidden = (p.store?.all ?? []).filter((d) => !d.visible && (d.timeframes === null || !p.timeframe || d.timeframes.includes(p.timeframe)));
   const chip = (on: boolean) => `chip h-7 ${on ? "chip-on" : ""}`;
 
   return (
@@ -171,16 +196,45 @@ export function ChartTerminalBar(p: Props) {
             </button>
           ))}
         </div>
-        <input type="color" className="h-7 w-8 bg-transparent" value={style.color} onChange={(e) => applyStyle({ color: e.target.value })} title={sel ? "Colour of the selected drawing" : "Colour for new drawings"} data-testid="draw-color" />
-        <select className="ctl h-7" value={style.width} onChange={(e) => applyStyle({ width: Number(e.target.value) as 1 | 2 | 3 })} title="Line width" data-testid="draw-width">
-          <option value={1}>1px</option>
-          <option value={2}>2px</option>
-          <option value={3}>3px</option>
+        <input type="color" className="h-7 w-8 bg-transparent" value={style.color.startsWith("#") ? style.color.slice(0, 7) : "#19C3DA"} onChange={(e) => applyStyle({ color: e.target.value })} title={sel ? "Colour of the selected drawing" : "Colour for new drawings"} data-testid="draw-color" />
+        <select className="ctl h-7" value={style.width} onChange={(e) => applyStyle({ width: Number(e.target.value) as DrawStyle["width"] })} title="Line width" data-testid="draw-width">
+          {[1, 2, 3, 4].map((w) => (
+            <option key={w} value={w}>
+              {w}px
+            </option>
+          ))}
         </select>
-        <button className={chip(style.dashed)} onClick={() => applyStyle({ dashed: !style.dashed })} data-testid="draw-dashed">
-          Dashed
+        <select className="ctl h-7" value={style.line_style} onChange={(e) => applyStyle({ line_style: e.target.value as DrawStyle["line_style"] })} title="Line style" data-testid="draw-line-style">
+          <option value="solid">Solid</option>
+          <option value="dashed">Dashed</option>
+          <option value="dotted">Dotted</option>
+        </select>
+        <button className={chip(settingsOpen && !!sel)} disabled={!sel || !p.store} onClick={() => setSettingsOpen((x) => !x)} title="Settings of the selected drawing (levels, labels, anchors, timeframes, templates)" data-testid="draw-settings">
+          Settings
         </button>
-        <button className="chip h-7" disabled={!sel} onClick={() => sel && (p.setDrawings(p.drawings.filter((d) => d.id !== sel.id)), p.setSelectedDrawing(null))} data-testid="draw-delete">
+        <button
+          className="chip h-7"
+          disabled={!sel || !p.store}
+          onClick={() => {
+            if (!sel || !p.store) return;
+            const copy: Drawing = { ...sel, drawing_id: newId(), version: undefined, created_at: undefined, updated_at: undefined, anchors: sel.anchors.map((a) => ({ ...a, p: a.p * 1.01 })) };
+            p.store.add(copy);
+            p.setSelectedDrawing(copy.drawing_id);
+          }}
+          title="Duplicate the selected drawing (offset 1 % in price)"
+          data-testid="draw-duplicate"
+        >
+          Duplicate
+        </button>
+        <button className="chip h-7" disabled={!sel || !p.store} onClick={() => sel && p.store && (p.store.patch(sel.drawing_id, { visible: false }), p.setSelectedDrawing(null))} title="Hide the selected drawing (kept; show it again from the hidden list)" data-testid="draw-hide-one">
+          Hide
+        </button>
+        {hidden.length > 0 && p.store && (
+          <button className="chip h-7" onClick={() => hidden.forEach((d) => p.store!.patch(d.drawing_id, { visible: true }))} title={hidden.map((d) => d.drawing_type).join(", ")} data-testid="draw-show-hidden">
+            Show {hidden.length} hidden
+          </button>
+        )}
+        <button className="chip h-7" disabled={!sel} onClick={() => sel && (p.setDrawings(p.drawings.filter((d) => d.drawing_id !== sel.drawing_id)), p.setSelectedDrawing(null))} data-testid="draw-delete">
           Delete
         </button>
         <button className={chip(!prefs.showDrawings)} onClick={() => set({ showDrawings: !prefs.showDrawings })} data-testid="draw-hide">
@@ -202,6 +256,17 @@ export function ChartTerminalBar(p: Props) {
         <span className="text-[11px] text-muted" data-testid="drawing-count">
           {p.drawings.length} drawing{p.drawings.length === 1 ? "" : "s"}
         </span>
+        {p.store && (
+          <>
+            <button className="btn h-7" onClick={() => void p.store!.saveNow()} disabled={p.store.state === "saving"} title="Drawings save automatically; this saves pending changes now" data-testid="draw-save">
+              Save
+            </button>
+            <span className={`text-[11px] ${p.store.state === "saved" ? "text-muted" : p.store.state === "error" || p.store.state === "offline" ? "text-down" : "text-forming"}`} data-testid="draw-save-state" data-state={p.store.state}>
+              {SAVE_LABEL[p.store.state]}
+            </span>
+            {p.store.message && <span className="text-[11px] text-forming" data-testid="draw-store-message">{p.store.message}</span>}
+          </>
+        )}
         <span className="mx-1 h-5 w-px bg-line" />
         <button className="btn h-7" onClick={p.onFit} title="Zoom out to the whole history" data-testid="fit-content">
           Fit
@@ -224,7 +289,7 @@ export function ChartTerminalBar(p: Props) {
         <button className="btn h-7" onClick={p.onScreenshot} data-testid="export-image">
           PNG
         </button>
-        <button className="btn h-7" onClick={p.onExportDrawings} title="Download all drawings (every symbol/timeframe) as JSON" data-testid="export-drawings">
+        <button className="btn h-7" onClick={p.onExportDrawings} title="Backup: download every drawing (all symbols) and templates as JSON" data-testid="export-drawings">
           Export drawings
         </button>
         <button className="btn h-7" onClick={() => fileRef.current?.click()} data-testid="import-drawings">
@@ -243,6 +308,7 @@ export function ChartTerminalBar(p: Props) {
           data-testid="import-file"
         />
       </div>
+      {settingsOpen && sel && p.store && <DrawingSettingsPanel d={sel} timeframe={p.timeframe ?? "1d"} onPatch={(change) => p.store!.patch(sel.drawing_id, change)} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

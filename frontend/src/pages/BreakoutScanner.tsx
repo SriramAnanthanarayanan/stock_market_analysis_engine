@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { SymbolButton, useOpenChart } from "../lib/openChart";
 import { api } from "../api/client";
 import type { BreakoutSignal, TechScanResult, Universe } from "../api/types";
 import { ErrorNote, FnoBadge } from "../components/common";
@@ -9,7 +10,7 @@ import { fmtBarTime, fmtNum } from "../lib/format";
 
 export function BreakoutScanner() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
+  const openChart = useOpenChart();
   const universe = (params.get("u") as Universe) || "all";
   const asof = params.get("asof") ?? "";
   const kind = params.get("kind") ?? "";
@@ -35,8 +36,26 @@ export function BreakoutScanner() {
   }, [universe, asof, kind, confirm, status, minVol, minAtr, maxAge, firstRun]);
   useEffect(load, [load, tick]);
 
+  const open = (r: BreakoutSignal) =>
+    openChart({
+      symbol: r.symbol,
+      timeframe: "1d",
+      asof: asof || null,
+      show: ["levels", "breakouts"],
+      context: {
+        title: r.direction === "bullish" ? `${r.lookback_days}-day high breakout` : `${r.lookback_days}-day low breakdown`,
+        lines: [
+          { k: "Breakout candle", v: fmtBarTime(r.time, "1d") },
+          { k: "Level", v: fmtNum(r.level) },
+          { k: "Close", v: fmtNum(r.close) },
+          { k: "Strength (ATR)", v: fmtNum(r.distance_atr, 2) },
+          { k: "Status", v: `${r.status} (${r.confirm_closes}-close)` },
+        ],
+        levels: [{ price: r.level, label: `${r.lookback_days}D level ${fmtNum(r.level)}`, color: r.direction === "bullish" ? "#95EB45" : "#F2643C" }],
+      },
+    });
   const cols: Column<BreakoutSignal>[] = [
-    { key: "symbol", label: "Symbol", render: (r) => <span className="font-medium text-ink">{r.symbol}</span>, sort: (r) => r.symbol },
+    { key: "symbol", label: "Symbol", render: (r) => <SymbolButton symbol={r.symbol} onOpen={() => open(r)} />, sort: (r) => r.symbol },
     { key: "company", label: "Company", render: (r) => <span className="text-muted">{r.company}</span>, sort: (r) => r.company ?? "" },
     { key: "fno", label: "F&O", render: (r) => <FnoBadge value={r.fno_status} /> },
     {
@@ -118,7 +137,7 @@ export function BreakoutScanner() {
         rows={res?.items ?? []}
         columns={cols}
         testid="breakout-table"
-        onRow={(r) => navigate(`/explorer/${r.symbol}?tf=1d&show=levels,breakouts${asof ? `&asof=${asof}` : ""}`)}
+        onRow={open}
         empty="No breakouts match these filters on the latest daily scan."
         initialSort={{ key: "atr", desc: true }}
       />

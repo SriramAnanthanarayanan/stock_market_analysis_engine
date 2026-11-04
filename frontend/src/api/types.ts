@@ -3,6 +3,27 @@
 
 export type Universe = "nifty500" | "fno" | "non_fno" | "all";
 export type Timeframe = "1h" | "4h" | "1d" | "1w";
+/** Scan timeframes + chart-only multi-month timeframes (see lib/timeframes.ts). */
+export type ChartTf = Timeframe | "1mo" | "3mo" | "6mo" | "12mo";
+
+export interface PartialCandle {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number | null;
+  sessions: number;
+  last_session: string | null;
+  period_end: string | null;
+}
+
+export interface Performance {
+  basis: string | null;
+  asof: string | null;
+  horizons: { label: string; months: number; return_pct: number | null; base_date: string | null; status: string }[];
+  note?: string;
+}
 export type StatusSlug =
   | "developing"
   | "forming"
@@ -223,7 +244,7 @@ export interface ChartResponse {
   company: string | null;
   fno_status: FnoStatus;
   in_nifty500: boolean;
-  timeframe: Timeframe;
+  timeframe: ChartTf;
   asof: string | null;
   source: "scan" | "adhoc";
   scan_id: string | null;
@@ -239,6 +260,10 @@ export interface ChartResponse {
   newer_data_available: boolean;
   notes: string[];
   data_source?: DataSourceInfo | null;
+  partial_candle?: PartialCandle | null;
+  performance?: Performance | null;
+  detector_support?: Record<string, boolean>;
+  candles_total?: number | null;
 }
 
 export interface DataSourceInfo {
@@ -796,10 +821,11 @@ export interface IndexChart {
   category: string;
   category_label: string;
   subcategory: string | null;
-  timeframe: Timeframe;
+  timeframe: ChartTf;
   asof: string | null;
   data_cutoff: string;
   candles: Candle[];
+  partial_candle?: PartialCandle | null;
   future_bars: { i: number; t: number }[];
   sr_zones: SRZone[];
   sr_zones_note: string;

@@ -426,6 +426,13 @@ class IndexDataService:
         item = self.registry.get(code)
         if item is None:
             raise IndexDataError(f"unknown index {code!r}")
+        from ..config import MULTI_MONTH_TIMEFRAMES
+
+        if timeframe in MULTI_MONTH_TIMEFRAMES:
+            from ..data.periods import split_complete
+
+            done, _ = split_complete(self.frame(code, "1d", cutoff), timeframe, cutoff, self.calendar)
+            return done
         if timeframe in ("1d", "1w"):
             daily, d_ends, weekly, w_ends = self._cleaned(code, item)
             cut = pd.Timestamp(cutoff).tz_convert(IST)

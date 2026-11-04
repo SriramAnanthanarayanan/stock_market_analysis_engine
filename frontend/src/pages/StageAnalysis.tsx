@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { SymbolButton, useOpenChart } from "../lib/openChart";
 import { api } from "../api/client";
 import type { StageList, StageRow } from "../api/types";
 import { ErrorNote, FnoBadge, Panel } from "../components/common";
@@ -12,7 +13,7 @@ import { UNIVERSES } from "../lib/status";
 const yesNo = (v: boolean | null | undefined) => (v === null || v === undefined ? <span className="text-muted">n/a</span> : v ? <span className="text-validated">yes</span> : <span className="text-muted">no</span>);
 
 export function StageAnalysis() {
-  const navigate = useNavigate();
+  const openChart = useOpenChart();
   const [params, setParams] = useSearchParams();
   const instrument = (params.get("inst") as "stock" | "index") || "stock";
   const universe = params.get("u") || "nifty500";
@@ -38,12 +39,28 @@ export function StageAnalysis() {
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   }, [instrument, universe, stage, rs, asof, setupOnly]);
-  const open = (r: StageRow) => navigate(r.instrument === "index" ? `/index/${encodeURIComponent(r.symbol)}?tf=1w&show=stage,rs` : `/explorer/${r.symbol}?tf=1w&show=stage,rs${asof ? `&asof=${asof}` : ""}`);
+  const open = (r: StageRow) =>
+    openChart({
+      symbol: r.symbol,
+      instrument: r.instrument === "index" ? "index" : "stock",
+      timeframe: "1w",
+      asof: asof || null,
+      show: ["stage", "rs"],
+      context: {
+        title: `Stage Analysis: ${r.stage_label}`,
+        lines: [
+          { k: "Rank", v: String(r.rank) },
+          { k: "Entry setup", v: r.metrics.setup_met ? "all checks pass" : `${(r.metrics.setup_checks ?? 6) - (r.metrics.setup_failed?.length ?? 6)}/${r.metrics.setup_checks ?? 6}` },
+          { k: "Base high / low", v: `${fmtNum(r.metrics.base_high)} / ${fmtNum(r.metrics.base_low)}` },
+          { k: "RS", v: fmtNum(r.metrics.rs, 3) },
+        ],
+      },
+    });
   const cols: Column<StageRow>[] = [
     { key: "rank", label: "#", align: "right", render: (r) => r.rank, sort: (r) => r.rank },
     { key: "setup", label: "Setup", render: (r) => (r.metrics.setup_met ? <span className="font-semibold text-validated" title="All entry-setup checks pass">&#10003; entry</span> : <span className="text-muted" title={(r.metrics.setup_failed ?? []).join(", ")}>{(r.metrics.setup_checks ?? 6) - (r.metrics.setup_failed?.length ?? 6)}/{r.metrics.setup_checks ?? 6}</span>), sort: (r) => (r.metrics.setup_met ? 0 : 1) * 10 + (r.metrics.setup_failed?.length ?? 7) },
     { key: "baselen", label: "Base wks", align: "right", render: (r) => r.metrics.base_duration_weeks ?? "-", sort: (r) => r.metrics.base_duration_weeks ?? null },
-    { key: "symbol", label: instrument === "index" ? "Index" : "Symbol", render: (r) => <span className="font-medium text-ink">{r.symbol}</span>, sort: (r) => r.symbol },
+    { key: "symbol", label: instrument === "index" ? "Index" : "Symbol", render: (r) => <SymbolButton symbol={r.symbol} onOpen={() => open(r)} />, sort: (r) => r.symbol },
     { key: "company", label: instrument === "index" ? "Name" : "Company", render: (r) => <span className="text-muted">{r.company}</span>, sort: (r) => r.company ?? "" },
     ...(instrument === "stock" ? [{ key: "fno", label: "F&O", render: (r: StageRow) => (r.fno_status ? <FnoBadge value={r.fno_status} /> : null) }] : []),
     { key: "price", label: "Price", align: "right", render: (r) => fmtNum(r.metrics.close), sort: (r) => r.metrics.close ?? null },

@@ -3,6 +3,7 @@ import type { Match, PatternInfo, StatusSlug } from "../api/types";
 import { fmtBarTime, fmtNum } from "../lib/format";
 import { CATEGORY_LABELS, STATUS_META, STATUS_ORDER } from "../lib/status";
 import { FnoBadge, QualityCell, StatusBadge } from "./common";
+import { SymbolButton } from "../lib/openChart";
 
 export interface Filters {
   pattern: string;
@@ -179,7 +180,9 @@ export function ResultsTable({ rows, onOpen, loading }: { rows: Match[]; onOpen:
                 data-symbol={m.symbol}
                 data-pattern={m.pattern}
               >
-                <td className="px-2 py-1.5 font-semibold text-ink">{m.symbol}</td>
+                <td className="px-2 py-1.5">
+                  <SymbolButton symbol={m.symbol} onOpen={() => onOpen(m)} />
+                </td>
                 <td className="max-w-[220px] truncate px-2 py-1.5 text-muted" title={m.company ?? ""}>
                   {m.company ?? "-"}
                 </td>

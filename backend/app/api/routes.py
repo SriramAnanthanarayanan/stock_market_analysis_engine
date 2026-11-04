@@ -12,7 +12,7 @@ from sqlalchemy import select, text
 from .. import __version__
 from .. import database as db
 from ..config import TIMEFRAMES, describe_config
-from ..models import ChartResponse, FnoStatus, PatternInfo, RefreshRequest, RefreshResponse, ScanResponse, ScanSummary, StatusSlug, Timeframe, Universe
+from ..models import ChartResponse, ChartTimeframe, FnoStatus, PatternInfo, RefreshRequest, RefreshResponse, ScanResponse, ScanSummary, StatusSlug, Timeframe, Universe
 from ..net import ssl_status
 from ..patterns.base import CATALOGUE, CATEGORY_LABELS, SPEC_BY_SLUG, Status
 from ..scanner import (
@@ -221,12 +221,13 @@ def refresh_scan(request: Request, body: RefreshRequest) -> dict[str, Any]:
 def chart(
     request: Request,
     symbol: str = Query(..., min_length=1, max_length=40, pattern=r"^[A-Za-z0-9&\-_.]+$"),
-    timeframe: Timeframe = "1d",
+    timeframe: ChartTimeframe = "1d",
     pattern_id: str | None = Query(None, min_length=8, max_length=64, pattern=r"^[0-9a-f]+$"),
     asof: date | None = None,
+    max_candles: int | None = Query(None, ge=100, le=20000, description="limit the payload (chart preview); the selected formation is always included"),
 ) -> dict[str, Any]:
     _check_asof(asof)
-    return build_chart(svc(request), symbol, timeframe, pattern_id, asof)
+    return build_chart(svc(request), symbol, timeframe, pattern_id, asof, max_candles)
 
 
 # ----------------------------------------------------------------- history

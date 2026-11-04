@@ -20,9 +20,9 @@ process.on("unhandledRejection", (e) => {
 });
 
 let browser;
-for (const channel of ["msedge", "chrome"]) {
+for (const opt of [...(process.env.PW_EXECUTABLE ? [{ executablePath: process.env.PW_EXECUTABLE }] : []), { channel: "msedge" }, { channel: "chrome" }]) {
   try {
-    browser = await chromium.launch({ channel, headless: true });
+    browser = await chromium.launch({ ...opt, headless: true });
     break;
   } catch {
     /* next */
@@ -66,6 +66,8 @@ try {
   await page.screenshot({ path: join(outDir, "e3-stage-page.png") });
   const sym = rsRows[0]?.symbol;
   await page.click('[data-testid="stage-open-chart"]');
+  await page.waitForSelector('[data-testid="chart-preview"]');
+  await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/tf=1w&show=stage,rs/);
   await waitDbg(() => window.__pasChart && window.__pasChart.timeframe === "1w" && window.__pasChart.rsLinePane && window.__pasChart.overlayLines === 1);
   const d = await dbg();

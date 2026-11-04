@@ -23,6 +23,8 @@ export interface PreviewContext {
   markers?: { t: number; label: string; color?: string; position?: "above" | "below" }[];
   /** Load the VCP overlay for this symbol. */
   vcp?: boolean;
+  /** Candle time the preview should bring into view (e.g. the start of a reference window). */
+  focusT?: number;
 }
 
 type Opener = (req: ChartRequest) => void;

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "typecheck": "tsc -p tsconfig.json",
-    "preview": "vite preview --port 5191 --strictPort"
+    "preview": "vite preview --port 5191 --strictPort",
+    "test": "node --test tests/run-unit.mjs"
   },
   "dependencies": {
     "lightweight-charts": "^5.0.0",

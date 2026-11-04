@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { SymbolButton, useOpenChart } from "../lib/openChart";
 import { api } from "../api/client";
 import type { IndicatorRow, TechScanResult, Timeframe, Universe } from "../api/types";
 import { ErrorNote, FnoBadge } from "../components/common";
@@ -18,7 +19,24 @@ const ALIGN: Record<string, string> = {
 
 export function IndicatorScanner() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
+  const openChart = useOpenChart();
+  const open = (r: IndicatorRow) =>
+    openChart({
+      symbol: r.symbol,
+      timeframe: r.timeframe,
+      asof: asof || null,
+      show: ["ema", "rsi", ...(r.divergences.length ? ["divergence"] : [])],
+      context: {
+        title: `EMA alignment: ${ALIGN[r.alignment ?? "not_available"] ?? r.alignment}`,
+        lines: [
+          { k: "Close", v: fmtNum(r.close) },
+          { k: "RSI", v: fmtNum(r.rsi, 1) },
+          { k: "ATR %", v: fmtNum(r.atr_pct, 2) },
+          { k: "Crossovers", v: r.crosses.map((c) => `${c.kind} ${c.direction}`).join(", ") || "-" },
+          { k: "Divergences", v: r.divergences.map((d) => `${d.direction} (${d.status})`).join(", ") || "-" },
+        ],
+      },
+    });
   const universe = (params.get("u") as Universe) || "all";
   const timeframe = (params.get("tf") as Timeframe) || "1d";
   const asof = params.get("asof") ?? "";
@@ -50,7 +68,7 @@ export function IndicatorScanner() {
     return <span className={v === "above" ? "text-validated" : v === "below" ? "text-down" : "text-muted"}>{v ?? "n/a"}</span>;
   };
   const cols: Column<IndicatorRow>[] = [
-    { key: "symbol", label: "Symbol", render: (r) => <span className="font-medium text-ink">{r.symbol}</span>, sort: (r) => r.symbol },
+    { key: "symbol", label: "Symbol", render: (r) => <SymbolButton symbol={r.symbol} onOpen={() => open(r)} />, sort: (r) => r.symbol },
     { key: "company", label: "Company", render: (r) => <span className="text-muted">{r.company}</span>, sort: (r) => r.company ?? "" },
     { key: "fno", label: "F&O", render: (r) => <FnoBadge value={r.fno_status} /> },
     { key: "close", label: "Close", align: "right", render: (r) => fmtNum(r.close), sort: (r) => r.close },
@@ -138,7 +156,7 @@ export function IndicatorScanner() {
         rows={res?.items ?? []}
         columns={cols}
         testid="indicator-table"
-        onRow={(r) => navigate(`/explorer/${r.symbol}?tf=${r.timeframe}&show=ema,rsi${r.divergences.length ? ",divergence" : ""}${asof ? `&asof=${asof}` : ""}`)}
+        onRow={open}
         empty="No symbols match these filters on this scan."
         initialSort={{ key: "rsi", desc: true }}
       />

@@ -35,6 +35,7 @@ export interface ChartDebugInfo {
   rsLinePoints: number;
   visibleFrom: number | null;
   visibleTo: number | null;
+  partialCandle: boolean;
 }
 
 export const chartDebug: ChartDebugInfo = {
@@ -70,6 +71,7 @@ export const chartDebug: ChartDebugInfo = {
   rsLinePoints: 0,
   visibleFrom: null,
   visibleTo: null,
+  partialCandle: false,
 };
 
 declare global {

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ChartDetection, ChartResponse, LineElement, Match, MarkerElement, PatternInfo, StatusSlug, Timeframe } from "../api/types";
+import type { ChartDetection, ChartResponse, LineElement, Match, MarkerElement, PatternInfo, Performance, StatusSlug, Timeframe } from "../api/types";
+import { CHART_TIMEFRAMES, isMultiMonth, isScanTimeframe, type ChartTimeframe } from "../lib/timeframes";
 import type { OverlayShape } from "../charts/OverlayPrimitive";
 import { LabelPanel } from "../components/LabelPanel";
 import { PatternChart } from "../charts/PatternChart";
@@ -12,7 +13,7 @@ import { StagePanel } from "../components/StagePanel";
 import { VcpPanel } from "../components/VcpPanel";
 import { ErrorNote, FnoBadge, KV, Panel, QualityCell, StatusBadge } from "../components/common";
 import { fmtBarTime, fmtNum, fmtPct, humanize } from "../lib/format";
-import { CATEGORY_LABELS, TIMEFRAMES } from "../lib/status";
+import { CATEGORY_LABELS } from "../lib/status";
 
 type Toggles = { overlay: boolean; swings: boolean; sr: boolean };
 
@@ -156,6 +157,37 @@ function LifecyclePanel({ d }: { d: ChartDetection }) {
   );
 }
 
+export interface ExplorerViewProps {
+  symbol: string;
+  timeframe: ChartTimeframe;
+  patternId: string | null;
+  asof: string | null;
+  show: string | null;
+  onTimeframe: (tf: ChartTimeframe) => void;
+  onSelectPattern: (id: string) => void;
+  onBack: () => void;
+  backLabel?: string;
+  /** Rendered inside the fullscreen overlay of the chart preview. */
+  embedded?: boolean;
+}
+
+/** Performance horizons (rolling returns, not candles). */
+export function PerformanceStrip({ perf }: { perf?: Performance | null }) {
+  if (!perf || !perf.horizons.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-[11px]" data-testid="performance-strip" title={`${perf.note ?? ""} Basis: ${perf.basis}.`}>
+      <span className="text-muted">Performance</span>
+      {perf.horizons.map((h) => (
+        <span key={h.label} className="num" data-testid={`perf-${h.label}`}>
+          <span className="text-muted">{h.label} </span>
+          {h.return_pct === null ? <span className="text-muted">n/a</span> : <span className={h.return_pct >= 0 ? "text-validated" : "text-down"}>{fmtPct(h.return_pct, 1)}</span>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Route wrapper: URL <-> ExplorerView props (filters stay in the URL). */
 export function Explorer() {
   const { symbol = "" } = useParams();
   const navigate = useNavigate();
@@ -163,9 +195,35 @@ export function Explorer() {
   // The dashboard passes its own URL (filters included) so "Scanner" returns to it.
   const backTo = (location.state as { from?: string } | null)?.from ?? "/";
   const [params, setParams] = useSearchParams();
-  const timeframe = (params.get("tf") as Timeframe) || "1d";
-  const patternId = params.get("pattern_id");
-  const asof = params.get("asof");
+  const timeframe = (params.get("tf") as ChartTimeframe) || "1d";
+  const setTf = (tf: ChartTimeframe) => {
+    const next = new URLSearchParams(params);
+    next.set("tf", tf);
+    next.delete("pattern_id"); // a detection belongs to one timeframe; never reuse coordinates
+    setParams(next, { state: location.state });
+  };
+  const select = (id: string) => {
+    const next = new URLSearchParams(params);
+    next.set("pattern_id", id);
+    setParams(next, { replace: true, state: location.state });
+  };
+  return (
+    <ExplorerView
+      symbol={symbol}
+      timeframe={timeframe}
+      patternId={params.get("pattern_id")}
+      asof={params.get("asof")}
+      show={params.get("show")}
+      onTimeframe={setTf}
+      onSelectPattern={select}
+      onBack={() => navigate(backTo)}
+    />
+  );
+}
+
+export function ExplorerView(props: ExplorerViewProps) {
+  const { symbol, timeframe, patternId, asof } = props;
+  const location = useLocation();
   const [data, setData] = useState<ChartResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -223,23 +281,16 @@ export function Explorer() {
     () => (data ? { symbol: data.symbol, timeframe: data.timeframe, asof: data.asof, scanId: data.scan_id, candles: data.candles } : null),
     [data],
   );
-  const term = useChartTerminal("stock", termSrc, params.get("show"));
+  const term = useChartTerminal("stock", termSrc, props.show);
   const chartShapes = useMemo(
     () => [...(labelOpen ? labelPreview : []), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes],
     [labelOpen, labelPreview, term.stageOverlay, term.vcpOverlay],
   );
 
-  const setTf = (tf: Timeframe) => {
-    const next = new URLSearchParams(params);
-    next.set("tf", tf);
-    next.delete("pattern_id"); // a detection belongs to one timeframe; never reuse coordinates
-    setParams(next, { state: location.state });
-  };
+  const setTf = props.onTimeframe;
   const select = (id: string) => {
     setSelected(id);
-    const next = new URLSearchParams(params);
-    next.set("pattern_id", id);
-    setParams(next, { replace: true, state: location.state });
+    props.onSelectPattern(id);
   };
 
   const markers = useMemo(
@@ -262,8 +313,8 @@ export function Explorer() {
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3" data-testid="explorer">
       <div className="panel flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2.5">
-        <button className="text-xs text-muted hover:text-ink" onClick={() => navigate(backTo)} data-testid="back">
-          &larr; Scanner
+        <button className="text-xs text-muted hover:text-ink" onClick={props.onBack} data-testid="back">
+          &larr; {props.backLabel ?? "Scanner"}
         </button>
         <div>
           <div className="flex items-center gap-2">
@@ -294,8 +345,8 @@ export function Explorer() {
 
       <div className="panel flex flex-wrap items-center gap-2 px-3 py-2" data-testid="chart-toolbar">
         <div className="flex gap-1" role="group" aria-label="Timeframe">
-          {TIMEFRAMES.map((t) => (
-            <button key={t.value} className={`chip ${t.value === timeframe ? "chip-on" : ""}`} onClick={() => setTf(t.value)} data-testid={`explorer-tf-${t.value}`}>
+          {CHART_TIMEFRAMES.map((t) => (
+            <button key={t.value} className={`chip ${t.value === timeframe ? "chip-on" : ""}`} onClick={() => setTf(t.value)} title={t.title} data-testid={`explorer-tf-${t.value}`}>
               {t.label}
             </button>
           ))}
@@ -327,9 +378,11 @@ export function Explorer() {
           Volume
         </button>
         <span className="mx-1 h-5 w-px bg-line" />
-        <button className={`chip h-7 ${labelOpen ? "chip-on" : ""}`} onClick={() => setLabelOpen((x) => !x)} data-testid="toggle-label">
-          Label chart
-        </button>
+        {isScanTimeframe(timeframe) && (
+          <button className={`chip h-7 ${labelOpen ? "chip-on" : ""}`} onClick={() => setLabelOpen((x) => !x)} data-testid="toggle-label">
+            Label chart
+          </button>
+        )}
         {capturing && <span className="text-xs text-forming">Click a candle on the chart...</span>}
         {loading && <span className="text-xs text-muted">Loading...</span>}
         {term.message && <span className="text-xs text-accent" data-testid="terminal-message">{term.message}</span>}
@@ -343,6 +396,8 @@ export function Explorer() {
             setDrawStyle={term.setDrawStyle}
             drawings={term.drawings}
             setDrawings={term.setDrawings}
+            store={term.drawingStore}
+            timeframe={timeframe}
             selectedDrawing={term.selectedDrawing}
             setSelectedDrawing={term.setSelectedDrawing}
             onFit={term.actions.onFit}
@@ -355,6 +410,9 @@ export function Explorer() {
             onImportDrawings={term.actions.onImportDrawings}
             dailyOnlyNote={timeframe !== "1d"}
           />
+        </div>
+        <div className="w-full">
+          <PerformanceStrip perf={data?.performance} />
         </div>
       </div>
 
@@ -389,6 +447,8 @@ export function Explorer() {
               prefs={term.prefs}
               drawings={term.drawings}
               onDrawingsChange={term.setDrawings}
+              makeDrawing={term.makeDrawing}
+              partialCandle={data.partial_candle ?? null}
               tool={labelOpen ? "none" : term.tool}
               onToolDone={() => term.setTool("none")}
               drawStyle={term.drawStyle}
@@ -403,7 +463,7 @@ export function Explorer() {
           {!data && !error && <div className="h-[62vh] min-h-[420px]" />}
         </div>
         <div className="flex flex-col gap-3">
-          {labelOpen && data && (
+          {labelOpen && data && isScanTimeframe(data.timeframe) && (
             <LabelPanel
               symbol={data.symbol}
               timeframe={data.timeframe}
@@ -445,7 +505,13 @@ export function Explorer() {
           {term.vcp?.vcp && term.prefs.showVcp && <VcpPanel v={term.vcp.vcp} stage={term.vcp.stage} />}
           {term.prefs.showVcp && term.vcp && !term.vcp.vcp && <div className="panel px-3 py-2 text-[11px] text-muted" data-testid="vcp-none">VCP: {term.vcp.note ?? "no VCP candidate"}</div>}
           <StagePanel stage={term.stage} rs={term.rsLine} />
-          <TechnicalPanel tech={term.tech} ind={term.indicators} timeframe={timeframe} error={term.techError} />
+          {isMultiMonth(timeframe) && (
+            <div className="panel px-3 py-2 text-[11px] text-muted" data-testid="multimonth-note">
+              {timeframe} candles are aggregated from completed daily candles. Pattern, S/R, candlestick and breakout detectors do not run on this timeframe; EMA / RSI / ATR are shown but not validated here.
+              {data?.partial_candle ? ` The running period (${data.partial_candle.sessions} sessions so far) is drawn muted and excluded from every calculation.` : ""}
+            </div>
+          )}
+          <TechnicalPanel tech={term.tech} ind={term.indicators} timeframe={(isScanTimeframe(timeframe) ? timeframe : "1d") as Timeframe} error={term.techError} />
           <DataSourcePanel ds={data?.data_source} />
         </div>
       </div>

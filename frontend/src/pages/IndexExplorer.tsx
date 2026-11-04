@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { IndexChart, IndexOverviewRow, RRGItem, Timeframe } from "../api/types";
+import { CHART_TIMEFRAMES, isScanTimeframe, type ChartTimeframe } from "../lib/timeframes";
 import { PatternChart } from "../charts/PatternChart";
 import { useChartTerminal } from "../charts/useChartTerminal";
 import { ChartTerminalBar } from "../components/ChartTerminalBar";
@@ -10,13 +11,12 @@ import { RRGChart } from "../components/RRGChart";
 import { DataSourcePanel, TechnicalPanel } from "../components/TechnicalPanel";
 import { StagePanel } from "../components/StagePanel";
 import { fmtBarTime, fmtDate, fmtNum, humanize } from "../lib/format";
-import { TIMEFRAMES } from "../lib/status";
 
 export function IndexExplorer() {
   const { code = "" } = useParams();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const timeframe = (params.get("tf") as Timeframe) || "1d";
+  const timeframe = (params.get("tf") as ChartTimeframe) || "1d";
   const asof = params.get("asof");
   const benchmark = params.get("bench") ?? "NIFTY 500";
   const [data, setData] = useState<IndexChart | null>(null);
@@ -51,7 +51,7 @@ export function IndexExplorer() {
   }, [code, benchmark, asof]);
   const src = useMemo(() => (data ? { symbol: data.code, timeframe: data.timeframe, asof: data.asof, scanId: null, candles: data.candles, instrument: "index" as const } : null), [data]);
   const term = useChartTerminal("index", src, params.get("show"));
-  const setTf = (tf: Timeframe) => {
+  const setTf = (tf: ChartTimeframe) => {
     const next = new URLSearchParams(params);
     next.set("tf", tf);
     setParams(next);
@@ -79,7 +79,7 @@ export function IndexExplorer() {
       </div>
       <div className="panel flex flex-wrap items-center gap-2 px-3 py-2">
         <div className="flex gap-1" role="group" aria-label="Timeframe">
-          {TIMEFRAMES.map((t) => {
+          {CHART_TIMEFRAMES.map((t) => {
             const intraday = t.value === "1h" || t.value === "4h";
             const disabled = intraday && data !== null && !intradayOk;
             return (
@@ -119,6 +119,8 @@ export function IndexExplorer() {
             setDrawStyle={term.setDrawStyle}
             drawings={term.drawings}
             setDrawings={term.setDrawings}
+            store={term.drawingStore}
+            timeframe={timeframe}
             selectedDrawing={term.selectedDrawing}
             setSelectedDrawing={term.setSelectedDrawing}
             onFit={term.actions.onFit}
@@ -161,6 +163,8 @@ export function IndexExplorer() {
               prefs={term.prefs}
               drawings={term.drawings}
               onDrawingsChange={term.setDrawings}
+              makeDrawing={term.makeDrawing}
+              partialCandle={data.partial_candle ?? null}
               tool={term.tool}
               onToolDone={() => term.setTool("none")}
               drawStyle={term.drawStyle}
@@ -208,7 +212,7 @@ export function IndexExplorer() {
             )}
           </Panel>
           <StagePanel stage={term.stage} rs={term.rsLine} />
-          <TechnicalPanel tech={term.tech} ind={term.indicators} timeframe={timeframe} error={term.techError} />
+          <TechnicalPanel tech={term.tech} ind={term.indicators} timeframe={(isScanTimeframe(timeframe) ? timeframe : "1d") as Timeframe} error={term.techError} />
           <DataSourcePanel ds={data?.data_source} />
           {reg && (
             <Panel title="Registry">

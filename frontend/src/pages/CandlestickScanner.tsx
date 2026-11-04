@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { SymbolButton, useOpenChart } from "../lib/openChart";
 import { api } from "../api/client";
 import type { CandleSignal, TechScanResult, Timeframe, Universe } from "../api/types";
 import { ErrorNote, FnoBadge } from "../components/common";
@@ -9,7 +10,7 @@ import { fmtBarTime, fmtNum, fmtVolume } from "../lib/format";
 
 export function CandlestickScanner() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
+  const openChart = useOpenChart();
   const universe = (params.get("u") as Universe) || "all";
   const timeframe = (params.get("tf") as Timeframe) || "1d";
   const asof = params.get("asof") ?? "";
@@ -33,8 +34,25 @@ export function CandlestickScanner() {
   }, [universe, timeframe, asof, kind, minAtr, minVol, maxAge]);
   useEffect(load, [load, tick]);
 
+  const open = (r: CandleSignal) =>
+    openChart({
+      symbol: r.symbol,
+      timeframe: r.timeframe,
+      asof: asof || null,
+      show: ["marubozu"],
+      context: {
+        title: r.direction === "bullish" ? "Bullish Marubozu" : "Bearish Marubozu",
+        lines: [
+          { k: "Candle", v: fmtBarTime(r.time, r.timeframe) },
+          { k: "Body / wicks", v: `${r.body_pct.toFixed(1)}% / ${r.upper_wick_pct.toFixed(1)}% / ${r.lower_wick_pct.toFixed(1)}%` },
+          { k: "Range / ATR", v: fmtNum(r.range_atr, 2) },
+          { k: "Volume ratio (20)", v: fmtNum(r.volume_ratio, 2) },
+        ],
+        markers: [{ t: r.t, label: "M", color: r.direction === "bullish" ? "#7CFC9A" : "#FF7AA2", position: r.direction === "bullish" ? "below" : "above" }],
+      },
+    });
   const cols: Column<CandleSignal>[] = [
-    { key: "symbol", label: "Symbol", render: (r) => <span className="font-medium text-ink">{r.symbol}</span>, sort: (r) => r.symbol },
+    { key: "symbol", label: "Symbol", render: (r) => <SymbolButton symbol={r.symbol} onOpen={() => open(r)} />, sort: (r) => r.symbol },
     { key: "company", label: "Company", render: (r) => <span className="text-muted">{r.company}</span>, sort: (r) => r.company ?? "" },
     { key: "fno", label: "F&O", render: (r) => <FnoBadge value={r.fno_status} /> },
     { key: "kind", label: "Pattern", render: (r) => <span className={r.direction === "bullish" ? "text-validated" : "text-down"}>{r.direction === "bullish" ? "Bullish Marubozu" : "Bearish Marubozu"}</span>, sort: (r) => r.kind },
@@ -93,7 +111,7 @@ export function CandlestickScanner() {
         rows={res?.items ?? []}
         columns={cols}
         testid="candle-table"
-        onRow={(r) => navigate(`/explorer/${r.symbol}?tf=${r.timeframe}&show=marubozu${asof ? `&asof=${asof}` : ""}`)}
+        onRow={open}
         empty="No Marubozu candles match these filters on this scan."
         initialSort={{ key: "ratr", desc: true }}
       />

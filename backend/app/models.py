@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Universe = Literal["nifty500", "fno", "non_fno", "all"]
 Timeframe = Literal["1h", "4h", "1d", "1w"]
+# Chart timeframes: the scan timeframes plus 1 / 3 / 6 / 12-month candles aggregated
+# from completed daily candles (chart-only; no detector runs on them).
+ChartTimeframe = Literal["1h", "4h", "1d", "1w", "1mo", "3mo", "6mo", "12mo"]
 StatusSlug = Literal["developing", "forming", "validated", "near_upper", "near_lower", "broke_above", "broke_below", "invalidated"]
 FnoStatus = Literal["YES", "NO", "UNKNOWN"]
 
@@ -276,12 +279,26 @@ class DataSourceInfo(BaseModel):
     note: str
 
 
+class PartialCandle(BaseModel):
+    """The running multi-month period (completed daily candles so far); display only."""
+
+    t: int
+    o: float
+    h: float
+    l: float
+    c: float
+    v: float | None
+    sessions: int
+    last_session: str | None
+    period_end: str | None
+
+
 class ChartResponse(BaseModel):
     symbol: str
     company: str | None
     fno_status: FnoStatus
     in_nifty500: bool
-    timeframe: Timeframe
+    timeframe: ChartTimeframe
     asof: str | None
     source: Literal["scan", "adhoc"]
     scan_id: str | None
@@ -297,6 +314,10 @@ class ChartResponse(BaseModel):
     newer_data_available: bool
     notes: list[str] = []
     data_source: DataSourceInfo | None = None
+    partial_candle: PartialCandle | None = None
+    performance: dict[str, Any] | None = None
+    detector_support: dict[str, bool] = {}
+    candles_total: int | None = None
 
 
 class PatternInfo(BaseModel):

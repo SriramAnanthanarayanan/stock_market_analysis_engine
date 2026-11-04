@@ -180,6 +180,9 @@ class PreparedSeries:
     cutoff: datetime
     dropped_incomplete: int
     clean_report: dict
+    # Multi-month timeframes: the running period aggregated from completed daily
+    # candles (flagged incomplete in charts; never used for calculations).
+    partial: pd.DataFrame | None = None
 
 
 def prepare_series(
@@ -189,7 +192,15 @@ def prepare_series(
     cutoff: datetime,
     calendar: NSECalendar,
 ) -> PreparedSeries:
-    """Clean, resample (4H) and keep only bars completed at or before ``cutoff``."""
+    """Clean, resample (4H, multi-month) and keep only bars completed at or before ``cutoff``."""
+    from ..config import MULTI_MONTH_MONTHS
+
+    if timeframe in MULTI_MONTH_MONTHS:
+        from .periods import period_bar_ends, split_complete
+
+        daily = prepare_series(raw, symbol, "1d", cutoff, calendar)
+        done, part = split_complete(daily.frame, timeframe, cutoff, calendar)
+        return PreparedSeries(symbol, timeframe, done, period_bar_ends(done.index, MULTI_MONTH_MONTHS[timeframe], calendar), cutoff, len(part), daily.clean_report, partial=part)
     interval = {"1h": "1h", "4h": "1h", "1d": "1d", "1w": "1wk"}[timeframe]
     cleaned, rep = clean_ohlcv(raw, interval, calendar)
     frame = resample_4h(cleaned) if timeframe == "4h" else cleaned

@@ -22,9 +22,9 @@ process.on("unhandledRejection", (e) => {
 });
 
 let browser;
-for (const channel of ["msedge", "chrome"]) {
+for (const opt of [...(process.env.PW_EXECUTABLE ? [{ executablePath: process.env.PW_EXECUTABLE }] : []), { channel: "msedge" }, { channel: "chrome" }]) {
   try {
-    browser = await chromium.launch({ channel, headless: true });
+    browser = await chromium.launch({ ...opt, headless: true });
     break;
   } catch {
     /* next */
@@ -41,7 +41,13 @@ const api = (path) => page.evaluate(async (p) => (await fetch(p)).json(), path);
 const dbg = () => page.evaluate(() => ({ ...window.__pasChart }));
 const waitDbg = (fn, ms = 20000) => page.waitForFunction(fn, null, { timeout: ms });
 const chartBox = async () => page.locator('[data-testid="pattern-chart"]').boundingBox();
-const stored = () => page.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith("pas.drawings.v1:")).map((k) => [k, JSON.parse(localStorage.getItem(k))])));
+// Drawings live in the database per symbol (docs/chart-drawing-persistence.md).
+const drawSym = () => decodeURIComponent(new URL(page.url()).pathname.split("/").pop());
+const stored = async () => (await page.evaluate(async (s) => (await fetch(`/api/drawings?symbol=${encodeURIComponent(s)}`)).json(), drawSym())).items;
+const autosaved = async () => {
+  await page.waitForTimeout(250);
+  await page.waitForFunction(() => document.querySelector('[data-testid="draw-save-state"]')?.getAttribute("data-state") === "saved", null, { timeout: 15000 }).catch(() => null);
+};
 
 try {
   await page.goto(`${base}/`, { waitUntil: "networkidle" });
@@ -140,6 +146,8 @@ try {
   await page.goto(`${base}/candlesticks?age=4`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="candle-table-row"]');
   await page.locator('[data-testid="candle-table-row"]').first().click();
+  await page.waitForSelector('[data-testid="chart-preview"]');
+  await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/show=marubozu/);
   await waitDbg(() => Object.keys(window.__pasChart.techMarkers).some((k) => k.endsWith("marubozu")));
   d = await dbg();
@@ -148,6 +156,8 @@ try {
   await page.goto(`${base}/breakouts?age=4`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="breakout-table-row"]');
   await page.locator('[data-testid="breakout-table-row"]').first().click();
+  await page.waitForSelector('[data-testid="chart-preview"]');
+  await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/show=levels,breakouts/);
   await waitDbg(() => window.__pasChart.dailyLevels === 2 && Object.keys(window.__pasChart.techMarkers).some((k) => k.includes("10d")));
   d = await dbg();
@@ -167,7 +177,7 @@ try {
 
   console.log("Drawing tools");
   await page.evaluate(() => localStorage.removeItem("pas.chartPrefs.v1")); // default panes: candles + volume
-  await page.goto(`${base}/explorer/ITC?tf=1d`, { waitUntil: "networkidle" });
+  await page.goto(`${base}/explorer/${process.env.E1_DRAW_SYMBOL || "ITC"}?tf=1d`, { waitUntil: "networkidle" });
   await waitDbg(() => window.__pasChart.candles > 100);
   let box = await chartBox();
   const at = (fx, fy) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy });
@@ -175,6 +185,11 @@ try {
     const p = at(fx, fy);
     await page.mouse.click(p.x, p.y);
   };
+  // Start from a clean symbol: this script writes drawings to the database and removes them again.
+  for (const d of await stored()) await page.evaluate(async ([id, v]) => fetch(`/api/drawings/${id}?version=${v}`, { method: "DELETE" }), [d.drawing_id, d.version]);
+  await page.reload({ waitUntil: "networkidle" });
+  await waitDbg(() => window.__pasChart.candles > 100 && window.__pasChart.drawings === 0);
+  box = await chartBox();
   await page.click('[data-testid="tool-hline"]');
   await click(0.5, 0.2);
   await page.click('[data-testid="tool-trend"]');
@@ -183,7 +198,7 @@ try {
   await page.click('[data-testid="tool-rect"]');
   await click(0.6, 0.5);
   await click(0.7, 0.4);
-  await page.click('[data-testid="tool-fib"]');
+  await page.click('[data-testid="tool-fib_retracement"]');
   await click(0.2, 0.55);
   await click(0.4, 0.25);
   await page.click('[data-testid="tool-ray"]');
@@ -193,52 +208,54 @@ try {
   await click(0.45, 0.3);
   await waitDbg(() => window.__pasChart.drawings === 6);
   check("create hline, trendline, zone, fib, ray, vline", (await dbg()).drawings === 6, `${(await dbg()).drawings} drawings`);
-  let saved = Object.values(await stored())[0] ?? [];
-  check("drawings anchored to time and price", saved.every((s) => s.points.every((p) => Number.isFinite(p.t) && p.t > 1e9 && Number.isFinite(p.p))), saved.map((s) => s.type).join(","));
+  await autosaved();
+  let saved = await stored();
+  check("drawings saved to the database, anchored to time and price", saved.length === 6 && saved.every((s) => s.anchors.every((p) => Number.isFinite(p.t) && p.t > 1e9 && Number.isFinite(p.p))), saved.map((s) => s.drawing_type).join(","));
   await page.screenshot({ path: join(outDir, "e1-drawings.png") });
   // Select the horizontal line by clicking it, then drag it down.
   await page.click('[data-testid="tool-none"]');
-  const hl = saved.find((s) => s.type === "hline");
+  const hl = saved.find((s) => s.drawing_type === "hline");
   await click(0.85, 0.2);
   await waitDbg(() => window.__pasChart.selectedDrawing !== null);
-  check("select an existing drawing", (await dbg()).selectedDrawing === hl.id, `${(await dbg()).selectedDrawing}`);
+  check("select an existing drawing", (await dbg()).selectedDrawing === hl.drawing_id, `${(await dbg()).selectedDrawing}`);
   const p0 = at(0.85, 0.2);
   await page.mouse.move(p0.x, p0.y);
   await page.mouse.down();
   await page.mouse.move(p0.x, p0.y + 40, { steps: 6 });
   await page.mouse.up();
-  await page.waitForTimeout(300);
-  saved = Object.values(await stored())[0];
-  const moved = saved.find((s) => s.id === hl.id);
-  check("move a drawing (price anchor changes)", moved.points[0].p < hl.points[0].p, `${hl.points[0].p.toFixed(2)} -> ${moved.points[0].p.toFixed(2)}`);
+  await autosaved();
+  saved = await stored();
+  const moved = saved.find((s) => s.drawing_id === hl.drawing_id);
+  check("move a drawing (price anchor changes, saved)", moved.anchors[0].p < hl.anchors[0].p && moved.version > hl.version, `${hl.anchors[0].p.toFixed(2)} -> ${moved.anchors[0].p.toFixed(2)}`);
   // Resize the trendline by dragging its end handle.
-  const tr = saved.find((s) => s.type === "trend");
+  const tr = saved.find((s) => s.drawing_type === "trend");
   const e = at(0.55, 0.3);
   await page.mouse.click(box.x + box.width * 0.425, box.y + box.height * 0.375); // middle of the trendline
   await page.waitForTimeout(150);
-  const selTrend = (await dbg()).selectedDrawing === tr.id;
+  const selTrend = (await dbg()).selectedDrawing === tr.drawing_id;
   await page.mouse.move(e.x, e.y);
   await page.mouse.down();
   await page.mouse.move(e.x + 60, e.y - 30, { steps: 6 });
   await page.mouse.up();
-  await page.waitForTimeout(300);
-  saved = Object.values(await stored())[0];
-  const tr2 = saved.find((s) => s.id === tr.id);
-  check("resize a drawing (end handle)", selTrend && tr2.points[1].t > tr.points[1].t && tr2.points[0].t === tr.points[0].t, `end ${tr.points[1].t} -> ${tr2.points[1].t}`);
+  await autosaved();
+  saved = await stored();
+  const tr2 = saved.find((s) => s.drawing_id === tr.drawing_id);
+  check("resize a drawing (end handle)", selTrend && tr2.anchors[1].t > tr.anchors[1].t && tr2.anchors[0].t === tr.anchors[0].t, `end ${tr.anchors[1].t} -> ${tr2.anchors[1].t}`);
   await page.selectOption('[data-testid="draw-width"]', "3");
-  await page.waitForTimeout(150);
-  saved = Object.values(await stored())[0];
-  check("change drawing style", saved.find((s) => s.id === tr.id).width === 3);
+  await autosaved();
+  saved = await stored();
+  check("change drawing style", saved.find((s) => s.drawing_id === tr.drawing_id).line_width === 3);
   await page.click('[data-testid="draw-delete"]');
   await waitDbg(() => window.__pasChart.drawings === 5);
-  check("delete a drawing", (await dbg()).drawings === 5);
+  await autosaved();
+  check("delete a drawing", (await dbg()).drawings === 5 && (await stored()).length === 5);
   await page.reload({ waitUntil: "networkidle" });
   await waitDbg(() => window.__pasChart.candles > 100 && window.__pasChart.drawings === 5);
-  check("drawings persist per symbol/timeframe", (await dbg()).drawings === 5);
+  check("drawings persist after a refresh (database)", (await dbg()).drawings === 5);
   await page.click('[data-testid="explorer-tf-1w"]');
   await waitDbg(() => window.__pasChart.timeframe === "1w");
-  await page.waitForTimeout(400);
-  check("drawings are separate per timeframe", (await dbg()).drawings === 0);
+  await page.waitForTimeout(800);
+  check("drawings belong to the symbol: shown on 1W too (default: every timeframe)", (await dbg()).drawings === 5);
   await page.click('[data-testid="explorer-tf-1d"]');
   await waitDbg(() => window.__pasChart.timeframe === "1d" && window.__pasChart.drawings === 5);
   const dl = page.waitForEvent("download");
@@ -251,11 +268,15 @@ try {
   await page.click('[data-testid="draw-hide"]');
   await page.click('[data-testid="draw-clear"]'); // confirm dialog accepted
   await waitDbg(() => window.__pasChart.drawings === 0);
-  check("clear all drawings with confirmation", (await dbg()).drawings === 0);
+  await autosaved();
+  check("clear all drawings with confirmation", (await dbg()).drawings === 0 && (await stored()).length === 0);
   const backup = await file.path();
   await page.setInputFiles('[data-testid="import-file"]', backup);
   await waitDbg(() => window.__pasChart.drawings === 5);
   check("import drawings backup", (await dbg()).drawings === 5);
+  for (const d of await stored()) await page.evaluate(async ([id, v]) => fetch(`/api/drawings/${id}?version=${v}`, { method: "DELETE" }), [d.drawing_id, d.version]);
+  await page.reload({ waitUntil: "networkidle" });
+  await waitDbg(() => window.__pasChart.candles > 100);
   await page.click('[data-testid="tool-crosshair"]');
   const c = at(0.5, 0.3);
   await page.mouse.move(c.x, c.y);

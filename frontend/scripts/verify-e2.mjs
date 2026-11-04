@@ -20,9 +20,9 @@ process.on("unhandledRejection", (e) => {
 });
 
 let browser;
-for (const channel of ["msedge", "chrome"]) {
+for (const opt of [...(process.env.PW_EXECUTABLE ? [{ executablePath: process.env.PW_EXECUTABLE }] : []), { channel: "msedge" }, { channel: "chrome" }]) {
   try {
-    browser = await chromium.launch({ channel, headless: true });
+    browser = await chromium.launch({ ...opt, headless: true });
     break;
   } catch {
     /* next */
@@ -80,6 +80,8 @@ try {
   await page.fill('[data-testid="ia-search"]', "NIFTY IT");
   await page.waitForTimeout(300);
   await page.locator('[data-testid="index-table-row"]', { hasText: "NIFTY IT" }).first().click();
+  await page.waitForSelector('[data-testid="chart-preview"]');
+  await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/\/index\//);
   await waitDbg(() => window.__pasChart && window.__pasChart.candles > 100, 30000);
   check("index chart from official data", (await dbg()).candles > 100 && (await page.textContent('[data-testid="data-source"]')).includes("official"), `${(await dbg()).candles} candles`);
@@ -148,6 +150,8 @@ try {
   await page.waitForTimeout(1500);
   const code = await page.locator('[data-testid="rrg-point"]').first().getAttribute("data-code");
   await page.locator('[data-testid="rrg-head"]').first().click();
+  await page.waitForSelector('[data-testid="chart-preview"]');
+  await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/\/index\//);
   check("click an RRG point opens its index", decodeURIComponent(page.url()).includes(`/index/${code}`), code);
 

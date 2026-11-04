@@ -1,28 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { Candle, IndicatorPayload, RSLinePayload, StageDetail, TechnicalPayload, Timeframe } from "../api/types";
+import type { Candle, IndicatorPayload, RSLinePayload, StageDetail, TechnicalPayload } from "../api/types";
 import type { OverlayShape } from "./OverlayPrimitive";
 import { vcpApi, type VcpSymbol } from "../api/advanced";
 import { vcpMarkers, vcpShapes } from "./vcpOverlay";
-import {
-  drawingKey,
-  exportAllDrawings,
-  importDrawings,
-  loadDrawings,
-  loadLayout,
-  loadPrefs,
-  saveDrawings,
-  saveLayout,
-  savePrefs,
-  type ChartPrefs,
-  type Drawing,
-} from "../lib/prefs";
+import { loadLayout, loadPrefs, newId, saveLayout, savePrefs, type ChartPrefs } from "../lib/prefs";
+import { drawingsApi } from "../api/advanced";
+import { useDrawingStore } from "../lib/drawingStore";
+import { defaultFibSettings } from "./fib";
+import { isFib, type Anchor, type Drawing, type DrawingType } from "./drawings";
+import { isScanTimeframe, type ChartTimeframe } from "../lib/timeframes";
 import type { ChartHandle, ExtraPane, OverlayLine } from "./PatternChart";
 import type { DrawStyle, DrawTool } from "./useDrawingTools";
 
 interface Source {
   symbol: string;
-  timeframe: Timeframe;
+  timeframe: ChartTimeframe;
   asof: string | null;
   scanId: string | null;
   candles: Candle[];
@@ -37,7 +30,9 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     setPrefsState(p);
     savePrefs(p);
   }, []);
-  // "?show=rsi,marubozu,..." from a scanner row enables those overlays once.
+  // "?show=rsi,marubozu,..." from a scanner row enables those overlays for this
+  // chart only: the override is not written to the saved preferences, so opening a
+  // preview from a scanner never changes the user's default chart layout.
   useEffect(() => {
     if (!showParam) return;
     const s = new Set(showParam.split(","));
@@ -55,27 +50,37 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
         showVcp: p.showVcp || s.has("vcp"),
         emas: s.has("ema") ? p.emas.map((e) => ({ ...e, visible: e.visible || [20, 50, 200].includes(e.period) })) : p.emas,
       };
-      savePrefs(next);
       return next;
     });
   }, [showParam]);
 
   const [tool, setTool] = useState<DrawTool>("none");
-  const [drawStyle, setDrawStyle] = useState<DrawStyle>({ color: "#19C3DA", width: 2, dashed: false });
+  const [drawStyle, setDrawStyle] = useState<DrawStyle>({ color: "#19C3DA", width: 2, line_style: "solid" });
   const [selectedDrawing, setSelectedDrawing] = useState<string | null>(null);
-  const key = src ? drawingKey(chartId, src.symbol, src.timeframe) : null;
-  const [drawings, setDrawingsState] = useState<Drawing[]>([]);
-  useEffect(() => {
-    setDrawingsState(key ? loadDrawings(key) : []);
-    setSelectedDrawing(null);
-  }, [key]);
-  const setDrawings = useCallback(
-    (d: Drawing[]) => {
-      setDrawingsState(d);
-      if (key) saveDrawings(key, d);
-    },
-    [key],
+  // Persistent drawings (database): per symbol, filtered by timeframe visibility.
+  const instr = src?.instrument ?? "stock";
+  const store = useDrawingStore(instr, src?.symbol ?? null, src?.timeframe ?? "1d");
+  const drawings = useMemo(() => store.onTimeframe.filter((d) => d.visible), [store.onTimeframe]);
+  useEffect(() => setSelectedDrawing(null), [src?.symbol, instr]);
+  const setDrawings = useCallback((d: Drawing[]) => store.commit(drawings, d), [store, drawings]);
+  const makeDrawing = useCallback(
+    (type: DrawingType, anchors: Anchor[], style: DrawStyle): Drawing => ({
+      drawing_id: newId(),
+      instrument: instr,
+      symbol: src?.symbol ?? "",
+      drawing_type: type,
+      anchors,
+      color: isFib(type) ? "#8B9BA5" : style.color,
+      line_style: style.line_style,
+      line_width: style.width,
+      style: {},
+      settings: isFib(type) ? defaultFibSettings(type as "fib_retracement" | "fib_extension") : null,
+      visible: true,
+      timeframes: null,
+    }),
+    [instr, src?.symbol],
   );
+  void chartId;
 
   const [indicators, setIndicators] = useState<IndicatorPayload | null>(null);
   const [tech, setTech] = useState<TechnicalPayload | null>(null);
@@ -111,13 +116,14 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
   const [stage, setStage] = useState<StageDetail | null>(null);
   const instrument = src?.instrument ?? "stock";
   useEffect(() => {
-    if (!src || startT === undefined || !prefs.showRsLine) {
+    if (!src || startT === undefined || !prefs.showRsLine || !isScanTimeframe(src.timeframe)) {
       setRsLine(null);
       return;
     }
+    const tf = src.timeframe;
     let cancelled = false;
     api
-      .rsline({ symbol: src.symbol, instrument, timeframe: src.timeframe, asof: src.asof, scan_id: instrument === "stock" ? src.scanId : null, start_t: startT })
+      .rsline({ symbol: src.symbol, instrument, timeframe: tf, asof: src.asof, scan_id: instrument === "stock" ? src.scanId : null, start_t: startT })
       .then((r) => !cancelled && setRsLine(r))
       .catch(() => !cancelled && setRsLine(null));
     return () => {
@@ -219,21 +225,18 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
       download(`${src.symbol}_${src.timeframe}.png`, c.toDataURL("image/png"));
     },
     onExportDrawings: () => {
-      const blob = new Blob([JSON.stringify({ format: "pas-drawings-v1", exported_at: new Date().toISOString(), drawings: exportAllDrawings() }, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      download("chart-drawings.json", url);
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      // Every drawing of every symbol (database backup), downloaded by the browser.
+      void store.saveNow().finally(() => download("chart-drawings.json", drawingsApi.exportUrl));
     },
     onImportDrawings: (file: File) => {
       file
         .text()
-        .then((txt) => {
-          const parsed = JSON.parse(txt);
-          const n = importDrawings(parsed?.drawings ?? parsed);
-          if (key) setDrawingsState(loadDrawings(key));
-          flash(`Imported ${n} drawings.`);
+        .then((txt) => drawingsApi.import(JSON.parse(txt)))
+        .then((r) => {
+          void store.reload();
+          flash(`Restore: ${r.inserted} added, ${r.updated} updated, ${r.skipped} unchanged${r.invalid ? `, ${r.invalid} invalid` : ""}.`);
         })
-        .catch(() => flash("Import failed: not a drawings backup file."));
+        .catch(() => flash("Restore failed: not a drawings backup file."));
     },
   };
 
@@ -246,6 +249,8 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     setDrawStyle,
     drawings,
     setDrawings,
+    makeDrawing,
+    drawingStore: store,
     selectedDrawing,
     setSelectedDrawing,
     indicators,

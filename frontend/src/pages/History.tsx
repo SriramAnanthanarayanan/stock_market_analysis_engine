@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useOpenChart } from "../lib/openChart";
 import { api } from "../api/client";
 import type { OutcomeGroup, PatternInfo, StatusSlug, Track, TrackDetail } from "../api/types";
 import { ErrorNote, Panel, StatusBadge } from "../components/common";
@@ -22,6 +22,7 @@ function OutcomeCells({ t, horizons }: { t: Track; horizons: number[] }) {
 }
 
 export function History() {
+  const openChart = useOpenChart();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [patterns, setPatterns] = useState<PatternInfo[]>([]);
   const [filters, setFilters] = useState({ symbol: "", pattern: "", timeframe: "", state: "", breakouts_only: false });
@@ -173,9 +174,9 @@ export function History() {
                 <div className="text-muted">
                   Formation {fmtDateTime(detail.track.formation_start)} to {fmtDateTime(detail.track.formation_end)}
                 </div>
-                <Link className="text-accent hover:underline" to={`/explorer/${detail.track.symbol}?tf=${detail.track.timeframe}&pattern_id=${detail.track.current_detection_id}`}>
+                <button className="text-accent hover:underline" onClick={() => openChart({ symbol: detail.track.symbol, timeframe: detail.track.timeframe, patternId: detail.track.current_detection_id, context: { title: `${detail.track.pattern_name} (track)`, lines: [{ k: "Status", v: detail.track.status_label }, { k: "First seen", v: fmtDateTime(detail.track.first_detected_at) }] } })} data-testid="track-open-chart">
                   Open chart
-                </Link>
+                </button>
                 <div className="label pt-1">Lifecycle events</div>
                 <ol className="max-h-64 space-y-1 overflow-y-auto">
                   {detail.events.map((e) => (
