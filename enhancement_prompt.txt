@@ -1,0 +1,1731 @@
+Master Implementation Prompt — Indian Price Action Screener Enhancement
+(Saved verbatim from the chat on 2026-11-04 so the full specification is available to every session. Work packages are called E1/E2/E3 in the code and docs to avoid confusion with the original screener phases P1-P3.)
+
+1. Role and objective
+
+Act as a senior Python quantitative developer, technical-analysis engineer, data engineer and React charting engineer.
+
+I have already implemented an Indian Price Action Screener in this repository.
+
+The existing application includes:
+
+- NSE stock universe and F&O universe.
+- Market data ingestion.
+- 1H, 4H, 1D and 1W timeframes.
+- 17 price-action patterns.
+- Support and resistance zones.
+- Pattern lifecycle tracking.
+- Pattern quality scoring.
+- Interactive candlestick charts using Lightweight Charts.
+- Backend APIs and SQLite persistence.
+- Pattern Explorer and screening dashboard.
+
+I now want to expand the application into a more comprehensive Indian Technical Analysis and Market Rotation Platform.
+
+The application must retain all existing functionality and add the following:
+
+1. Marubozu candlestick detection.
+2. 10-day high breakout and 10-day low breakdown.
+3. Technical indicators: RSI, EMA 10/20/30/50/100/200, RSI divergence and ATR.
+4. A lightweight interactive charting terminal with basic drawing tools.
+5. Relative Rotation Graph (RRG) for sector and index rotation.
+6. Comprehensive NSE index analysis, including broad-market, sectoral, thematic and factor indices.
+7. Stage Analysis using my existing implementation and setup files:
+   - "rs_line.txt"
+   - "stage_analysis.txt"
+   - Any related indicator or setup code available in this repository.
+
+Critical: Do not rebuild the application from scratch. Extend the existing codebase, reuse existing components and preserve compatibility with the current database and APIs wherever possible.
+
+The completed application should feel like a lightweight technical-analysis terminal purpose-built for NSE markets.
+
+---
+
+2. First task: Audit the existing codebase
+
+Before making changes, inspect the entire repository.
+
+Do not start coding before understanding the existing architecture.
+
+2.1 Inspect existing implementation
+
+Locate and understand:
+
+- Backend application structure.
+- Frontend pages and reusable components.
+- Existing database schema.
+- Existing market data provider.
+- OHLCV storage and caching.
+- Current timeframe and candle-completion logic.
+- Existing indicator calculations, if any.
+- Existing chart components.
+- Lightweight Charts version.
+- Pattern detector interfaces.
+- Existing API routes.
+- Scheduler.
+- Configuration management.
+- Existing tests.
+
+Search for existing implementations before writing new ones. Reuse them where appropriate.
+
+2.2 Stage Analysis source files — mandatory
+
+Search the complete repository recursively for:
+
+- "rs_line.txt"
+- "stage_analysis.txt"
+- RS Line indicator code.
+- Stage Analysis indicator code.
+- Related configuration, setup or supporting scripts.
+
+Use case-insensitive filename search if needed.
+
+Read the complete contents of these files and any directly related implementation code.
+
+These files contain my existing Stage Analysis logic and setup. They are the authoritative functional specification for this feature.
+
+Important implementation instructions
+
+1. Do not replace my Stage Analysis rules with generic Stan Weinstein Stage Analysis rules.
+2. Do not simplify or reinterpret my existing conditions.
+3. Do not invent thresholds, moving-average periods or stage-transition conditions.
+4. Preserve the exact logic, formulas, conditions, lookbacks, timeframe assumptions and indicator behaviour found in the source files.
+5. If a rule is ambiguous, inspect the related source code and setup before making assumptions.
+6. If the code is TradingView Pine Script, translate the logic faithfully into the backend's Python indicator/detection implementation.
+7. Preserve calculation order, lookback behaviour, crossover semantics, offsets, "na" handling, timeframe behaviour and confirmation conditions.
+8. Do not introduce future leakage when translating Pine Script series calculations.
+9. Keep the original source files unchanged.
+10. Document the mapping between the original source code and the new Python implementation.
+
+If one of these files cannot be found, search the entire repository before reporting it as missing. Do not fabricate the missing logic.
+
+Stage Analysis deliverable
+
+Create:
+
+"docs/stage-analysis-implementation.md"
+
+Include:
+
+- Source files inspected.
+- Exact logic extracted.
+- Original indicator/setup conditions.
+- Mapping of source calculations to Python functions.
+- Stage classification conditions.
+- RS Line calculations.
+- Relevant configuration values.
+- Timeframe assumptions.
+- Test cases used to verify the translation.
+- Any differences that could not be reproduced exactly.
+
+The Stage Analysis feature is not complete until its implementation has been checked against the original source logic.
+
+---
+
+3. Architecture and implementation principles
+
+Maintain the existing architecture.
+
+Do not introduce unnecessary infrastructure.
+
+Reuse:
+
+- Existing FastAPI backend.
+- Existing SQLite database.
+- Existing SQLAlchemy Core conventions.
+- Existing market data provider abstraction.
+- Existing candle storage.
+- Existing React/Vite frontend.
+- Existing Lightweight Charts integration.
+- Existing scan and lifecycle frameworks.
+
+Keep indicator calculations and screening logic in the backend. The frontend should primarily render and interact with the results.
+
+Maintain a clean separation between:
+
+1. Price-action pattern detection.
+2. Technical indicator calculation.
+3. Candlestick detection.
+4. Breakout detection.
+5. RRG calculations.
+6. Index analysis.
+7. Stage Analysis.
+8. Chart rendering and user drawings.
+
+These analytical modules can share the same candle data and indicator cache, but should not become one large detector.
+
+3.1 Data consistency
+
+A previous issue in this application was that support/resistance levels did not match TradingView. For example, TradingView displayed approximately ₹1,550 while the dashboard displayed ₹1,450.
+
+Do not introduce another data inconsistency while adding these features.
+
+Audit and document:
+
+- Raw versus adjusted OHLC.
+- Provider source.
+- Exchange/index symbol mapping.
+- Candle timestamps.
+- Asia/Kolkata handling.
+- Incomplete candles.
+- Missing candles.
+- Historical corporate-action adjustments.
+- Indicator calculation basis.
+
+Maintain separate raw and adjusted price representations when the data provider makes both available.
+
+Use raw OHLC as the default basis for:
+
+- Candlestick charts.
+- Price-action patterns.
+- Support/resistance.
+- Marubozu.
+- Price breakouts.
+- Chart annotations.
+
+Use appropriately adjusted data for historical return calculations and relative performance analysis, where corporate actions need to be accounted for.
+
+Never mix adjusted indicator values with unadjusted chart prices without explicitly identifying the basis.
+
+Provide a data-source and adjustment indicator in the chart information panel.
+
+All indicators and detectors must use completed candles by default.
+
+---
+
+4. Feature 1 — Marubozu candlestick detection
+
+Add a separate Candlestick Patterns category.
+
+First implementation:
+
+- Bullish Marubozu.
+- Bearish Marubozu.
+
+4.1 Initial numerical rules
+
+These are configurable starting defaults:
+
+Parameter| Initial value
+Body / total candle range| >= 90%
+Upper wick / total range| <= 5%
+Lower wick / total range| <= 5%
+Minimum candle range| > 0
+Volume lookback| 20 bars
+
+Definitions:
+
+candle_range = high - low
+body = abs(close - open)
+
+upper_wick = high - max(open, close)
+lower_wick = min(open, close) - low
+
+body_ratio = body / candle_range
+upper_wick_ratio = upper_wick / candle_range
+lower_wick_ratio = lower_wick / candle_range
+
+Bullish Marubozu:
+
+close > open
+body_ratio >= 0.90
+upper_wick_ratio <= 0.05
+lower_wick_ratio <= 0.05
+
+Bearish Marubozu:
+
+close < open
+body_ratio >= 0.90
+upper_wick_ratio <= 0.05
+lower_wick_ratio <= 0.05
+
+Exclude zero-range candles and invalid OHLC records.
+
+The thresholds must be configurable.
+
+4.2 Additional metrics
+
+For every detected Marubozu, calculate:
+
+- Body percentage.
+- Upper wick percentage.
+- Lower wick percentage.
+- Total candle range.
+- Range / ATR(14).
+- Volume.
+- Volume ratio against previous 20 completed candles.
+- Candle timestamp.
+- Timeframe.
+
+Do not make volume a mandatory Marubozu validity condition.
+
+Volume should be shown as supporting information.
+
+4.3 UI
+
+Display a distinct marker on the Marubozu candle.
+
+Show the detected candle's metrics in the chart details panel.
+
+Allow filtering by:
+
+- Bullish Marubozu.
+- Bearish Marubozu.
+- Timeframe.
+- Minimum candle range in ATR.
+- Minimum relative volume.
+
+Do not call every large-bodied candle a Marubozu. Follow the configured numerical rules.
+
+---
+
+5. Feature 2 — 10-day high breakout and 10-day low breakdown
+
+Add a new Breakout Scanner category.
+
+Initially implement:
+
+- 10-day high breakout.
+- 10-day low breakdown.
+
+Make the lookback configurable so 20-day and 50-day levels can be added without redesigning the module.
+
+5.1 Numerical definition
+
+Use the previous ten completed daily candles. Exclude the current daily candle from the reference window.
+
+previous_10_day_high = max(previous_10_daily_highs)
+previous_10_day_low = min(previous_10_daily_lows)
+
+Bullish breakout:
+
+close > previous_10_day_high + break_buffer
+
+Bearish breakdown:
+
+close < previous_10_day_low - break_buffer
+
+Initial break buffer:
+
+"0.1 × ATR(14)"
+
+The reference period must contain ten completed daily candles, not ten calendar days.
+
+A completed daily candle is required for a confirmed breakout.
+
+Use these configurable confirmation modes:
+
+- One completed close beyond the level.
+- Two consecutive completed closes beyond the level.
+
+Default: one completed close. Display whether confirmation is one-close or two-close.
+
+5.2 Additional breakout metrics
+
+Calculate:
+
+- Previous 10-day high.
+- Previous 10-day low.
+- Distance from reference level.
+- Breakout percentage.
+- Breakout candle range / ATR.
+- Volume ratio relative to previous 20 daily candles.
+- Previous resistance/support level.
+- Confirmation status.
+- Breakout date and timestamp.
+
+Volume is a supporting confirmation metric, not a mandatory condition unless enabled by the user.
+
+5.3 Timeframe handling
+
+The 10-day breakout must always use daily candles.
+
+When the user views a 1H or 4H chart:
+
+- Overlay the current daily 10-day high and low levels.
+- Clearly label the levels as daily-derived.
+- Do not accidentally calculate a ten-hour or ten-bar breakout.
+- Show the latest completed daily reference candle date.
+
+When the daily breakout is detected, mark the corresponding breakout on the daily chart.
+
+5.4 Breakout Scanner UI
+
+Provide filters:
+
+- 10-day high breakout.
+- 10-day low breakdown.
+- Confirmation mode.
+- Minimum volume ratio.
+- Minimum breakout strength in ATR.
+- NIFTY 500 / F&O / Non-F&O.
+- As-of date.
+
+Results table:
+
+- Symbol.
+- Company.
+- F&O membership.
+- Breakout type.
+- Previous high/low.
+- Latest close.
+- Breakout percentage.
+- ATR multiple.
+- Volume ratio.
+- Breakout timestamp.
+
+Do not label these results as trading recommendations.
+
+---
+
+6. Feature 3 — Technical indicators
+
+Add the following indicators to the charting engine:
+
+1. EMA 10.
+2. EMA 20.
+3. EMA 30.
+4. EMA 50.
+5. EMA 100.
+6. EMA 200.
+7. RSI.
+8. RSI divergence.
+9. ATR.
+
+All calculations must use the same underlying OHLCV series as the displayed chart.
+
+Use completed candles by default.
+
+6.1 EMA
+
+Calculate:
+
+- EMA 10.
+- EMA 20.
+- EMA 30.
+- EMA 50.
+- EMA 100.
+- EMA 200.
+
+Use standard exponential moving average calculation with clearly defined initialisation and warm-up behaviour.
+
+The same calculation must be used by the backend and chart.
+
+EMA chart controls
+
+Provide individual show/hide controls for each EMA.
+
+The user should be able to:
+
+- Enable multiple EMAs simultaneously.
+- Disable an individual EMA.
+- Change the EMA period.
+- Change line appearance.
+- Restore default settings.
+
+Display latest EMA values in a compact chart legend.
+
+EMA alignment analysis
+
+Calculate the following states:
+
+Bullish full alignment:
+
+"EMA10 > EMA20 > EMA30 > EMA50 > EMA100 > EMA200"
+
+Bearish full alignment:
+
+"EMA10 < EMA20 < EMA30 < EMA50 < EMA100 < EMA200"
+
+Also calculate:
+
+- Price above/below EMA 20.
+- Price above/below EMA 50.
+- Price above/below EMA 200.
+- EMA 20/50 bullish crossover.
+- EMA 20/50 bearish crossover.
+- EMA 50/200 bullish crossover.
+- EMA 50/200 bearish crossover.
+
+Do not describe EMA alignment or crossovers as guaranteed signals.
+
+EMA alignment scanner
+
+Allow screening by:
+
+- Bullish full alignment.
+- Bearish full alignment.
+- Partial bullish alignment.
+- Partial bearish alignment.
+- Price above EMA 200.
+- Price below EMA 200.
+- EMA crossover events.
+
+Keep this separate from the existing 17-pattern scanner.
+
+6.2 RSI
+
+Initial defaults:
+
+- Period: 14.
+- Overbought: 70.
+- Oversold: 30.
+- Additional reference levels: 40, 50 and 60.
+
+Use a documented, consistent RSI calculation with Wilder smoothing.
+
+Display RSI in a separate chart pane.
+
+Support:
+
+- Configurable RSI period.
+- Configurable overbought/oversold levels.
+- Show/hide.
+- Latest RSI value.
+- Historical RSI line.
+
+Include tests for flat prices, rising prices, falling prices and warm-up periods.
+
+6.3 RSI divergence detection
+
+Implement:
+
+- Regular bullish divergence.
+- Regular bearish divergence.
+
+Bullish divergence:
+
+- Price forms a lower low.
+- RSI forms a higher low.
+
+Bearish divergence:
+
+- Price forms a higher high.
+- RSI forms a lower high.
+
+Use confirmed swing points to avoid repainting.
+
+Initial configuration:
+
+- Swing lookback: 5 bars.
+- Compare the latest two confirmed price swing lows/highs.
+- RSI must be evaluated at the corresponding price pivot bars.
+- Configurable maximum number of bars between pivots.
+- Configurable minimum price difference.
+- Configurable minimum RSI difference.
+
+Use ATR-normalised price differences where appropriate.
+
+Suggested initial minimums:
+
+- Price difference: at least "0.1 × ATR(14)" between the compared swing points.
+- RSI difference: at least 2 RSI points.
+
+All values must be configurable.
+
+Do not generate divergence merely because the RSI line appears visually different. Follow the confirmed pivot and threshold rules.
+
+Divergence lifecycle
+
+Provide:
+
+- Developing divergence when a second pivot is provisional.
+- Confirmed divergence when both pivots are confirmed.
+- Invalidated divergence when the price moves beyond the relevant previous swing extreme according to a documented configurable rule.
+
+Never use a future candle to mark historical divergence as already confirmed.
+
+Chart rendering
+
+Draw:
+
+- Line joining the two price pivots.
+- Corresponding line joining the two RSI pivots.
+- Bullish/bearish divergence marker.
+- Divergence confirmation timestamp.
+
+Allow show/hide of divergence annotations.
+
+Hidden divergence can be added later; do not mix it with regular divergence in the first implementation.
+
+6.4 ATR
+
+Initial defaults:
+
+- Period: 14.
+- Wilder smoothing.
+
+Calculate:
+
+- ATR value.
+- ATR as percentage of close.
+- Candle range / ATR.
+- Price distance / ATR.
+
+Display ATR in a separate pane or compact indicator area.
+
+Use ATR consistently with existing pattern detector configuration.
+
+Do not calculate multiple conflicting ATR versions across modules.
+
+---
+
+7. Feature 4 — Upgrade to a lightweight charting terminal
+
+The existing Lightweight Charts integration must become a more flexible charting environment.
+
+Do not replace Lightweight Charts with another library.
+
+Use the existing compatible Lightweight Charts v5 architecture.
+
+7.1 Main chart layout
+
+Main price pane:
+
+- Candlesticks.
+- EMA overlays.
+- Pattern geometry.
+- Support/resistance.
+- Breakout levels.
+- Marubozu markers.
+- User drawings.
+
+Separate panes:
+
+- Volume.
+- RSI.
+- ATR.
+- RSI divergence annotations on RSI and price panes.
+- RS Line where applicable for Stage Analysis.
+
+The chart should support configurable pane visibility and layout.
+
+7.2 Drawing tools
+
+Implement the following basic drawing tools:
+
+1. Horizontal line.
+2. Trendline.
+3. Ray.
+4. Rectangle / price zone.
+5. Vertical line.
+6. Fibonacci retracement.
+7. Crosshair inspection.
+
+Features:
+
+- Select tool.
+- Start drawing.
+- Complete drawing.
+- Cancel drawing.
+- Select existing drawing.
+- Move drawing.
+- Resize drawing.
+- Change colour/style.
+- Delete drawing.
+- Hide/show drawings.
+- Clear all drawings with confirmation.
+
+Each drawing must be anchored to chart time and price values, not screen pixel coordinates.
+
+Persist drawings per:
+
+- User/browser installation.
+- Symbol.
+- Timeframe.
+- Chart identity.
+
+Use the existing persistence approach where appropriate. Local storage may be used initially for personal user annotations, provided there is a documented export/backup strategy.
+
+Keep manual drawings separate from automatically detected pattern geometry.
+
+Do not let manual drawings modify detector calculations or support/resistance zones.
+
+7.3 Chart controls
+
+Support:
+
+- Zoom.
+- Pan.
+- Crosshair.
+- Fit content.
+- Reset zoom.
+- Go to latest completed candle.
+- Show/hide volume.
+- Show/hide indicators.
+- Switch timeframe.
+- Switch symbol.
+- Save/restore chart layout.
+- Export chart image where supported.
+
+Ensure proper chart cleanup, resize handling and memory management.
+
+Continue using v5 APIs such as "createChart", "CandlestickSeries", "LineSeries", "HistogramSeries" and "createSeriesMarkers" as applicable.
+
+Do not use deprecated v4 methods.
+
+---
+
+8. Feature 5 — Relative Rotation Graph (RRG)
+
+Implement an interactive Relative Rotation Graph for sector and index rotation.
+
+This should help identify which sectors and index categories are showing improving or weakening relative strength against a benchmark.
+
+8.1 Scope
+
+RRG should initially support:
+
+- NSE sectoral indices.
+- NSE broad-market indices.
+- NSE thematic indices.
+- NSE factor/strategy indices.
+
+The user should be able to choose which categories appear in the RRG.
+
+Examples:
+
+- Banking.
+- Financial Services.
+- IT.
+- Auto.
+- Pharma.
+- FMCG.
+- Metals.
+- Energy.
+- Healthcare.
+- Realty.
+- Midcap.
+- Smallcap.
+- Momentum.
+- Value.
+- Quality.
+- Low Volatility.
+- Equal Weight.
+
+Use the index registry described in Section 9.
+
+8.2 Benchmark
+
+Provide configurable benchmarks.
+
+Initial default:
+
+"NIFTY 500"
+
+Alternative:
+
+"NIFTY 50"
+
+Allow the benchmark to be changed from the RRG controls.
+
+Do not hardcode the benchmark throughout the calculation code.
+
+8.3 RRG calculation
+
+Implement a transparent RRG-inspired methodology using weekly price data.
+
+Do not claim to reproduce proprietary JdK RRG calculations exactly.
+
+Clearly document that this is a configurable, internally implemented RRG-style relative rotation calculation.
+
+Use a common, aligned weekly dataset for each index and the benchmark.
+
+Default weekly parameters:
+
+- Relative strength smoothing: 14 weeks.
+- RS momentum smoothing: 14 weeks.
+- Trail length: 12 weeks.
+
+Allow these parameters to be configured.
+
+Definitions:
+
+"RS = index_close / benchmark_close"
+
+"RS_Ratio = 100 × RS / EMA(RS, rs_period)"
+
+"RS_Momentum = 100 × RS_Ratio / EMA(RS_Ratio, momentum_period)"
+
+Use the same completed weekly timestamps for the index and benchmark.
+
+Do not calculate from incomplete current-week candles.
+
+Handle missing weeks and insufficient history explicitly. Never silently forward-fill large missing-data gaps.
+
+Document the formula and its limitations.
+
+8.4 RRG quadrants
+
+Use 100 as the central reference level for both axes.
+
+Quadrant| RS-Ratio| RS-Momentum| Meaning
+Leading| > 100| > 100| Relative strength and momentum are positive
+Weakening| > 100| < 100| Relative strength remains positive but momentum is weakening
+Lagging| < 100| < 100| Relative strength and momentum are weak
+Improving| < 100| > 100| Relative strength is weak but momentum is improving
+
+These labels describe relative rotation, not guaranteed future performance.
+
+8.5 RRG visualization
+
+Build an interactive scatter/trail chart.
+
+Each index should have:
+
+- Unique label.
+- Distinct colour.
+- Current position.
+- Historical trail.
+- Latest RS-Ratio.
+- Latest RS-Momentum.
+- Quadrant.
+- Weekly direction of movement.
+
+Support:
+
+- 4-quadrant display.
+- 4/8/12-week trail length.
+- Show/hide individual indices.
+- Filter by sector/category.
+- Search index.
+- Select benchmark.
+- Select historical as-of date.
+- Hover tooltip.
+- Click index to open its Index Analysis page.
+
+Display the movement direction using the chronological trail.
+
+Avoid clutter when many indices are selected. Provide category filters and a maximum-visible-items control.
+
+8.6 RRG data and historical correctness
+
+- Use weekly completed prices.
+- Use a consistent adjusted/total-return basis where available.
+- Prefer official total-return index data if it is available and reliable for the relevant indices.
+- Clearly label price-index versus total-return-index calculations.
+- Use only information available at the selected as-of date.
+- Persist RRG calculation metadata and parameters.
+- Do not mix incompatible data bases within one graph without warning.
+
+Add tests for quadrant classification, weekly alignment, missing data, as-of dates and trail ordering.
+
+---
+
+9. Feature 6 — NSE index analysis
+
+Build a comprehensive Index Analysis module covering the NSE market.
+
+The goal is to analyse the broader market, sectors, themes and factor indices rather than tracking only a few familiar benchmarks.
+
+9.1 Index universe discovery
+
+Do not hardcode a small incomplete index list and call it comprehensive.
+
+Create an index registry.
+
+Use the official NSE/Nifty Indices sources as the authoritative reference for discovering and validating available index names, classifications and symbols.
+
+Verify the currently published index catalogue and its category structure during implementation.
+
+Do not invent symbols or assume a Yahoo Finance ticker based solely on an index's display name.
+
+For each index, maintain:
+
+- Official index name.
+- Short display name.
+- Official symbol/code.
+- Category.
+- Subcategory.
+- Provider identifier.
+- Provider data status.
+- Index type.
+- Price-index or total-return designation, where relevant.
+- Active/inactive status.
+- Last successful data refresh.
+- Source URL/reference.
+- Availability status.
+
+Keep the registry maintainable so newly introduced indices can be added without changing the entire application.
+
+If an index cannot be obtained from the current data provider:
+
+- Mark its data status as unavailable.
+- Record the reason.
+- Do not silently replace it with an ETF, stock or similar index.
+- Allow an explicitly configured alternative provider mapping where available.
+- Clearly identify any proxy data rather than presenting it as the official index.
+
+9.2 Index categories
+
+Include the following categories, subject to verification against the current official catalogue.
+
+A. Broad market indices
+
+Include the major available indices such as:
+
+- NIFTY 50.
+- NIFTY NEXT 50.
+- NIFTY 100.
+- NIFTY 200.
+- NIFTY 500.
+- NIFTY TOTAL MARKET.
+- NIFTY MIDCAP 50.
+- NIFTY MIDCAP 100.
+- NIFTY MIDCAP 150.
+- NIFTY SMALLCAP 50.
+- NIFTY SMALLCAP 100.
+- NIFTY SMALLCAP 250.
+- NIFTY MICROCAP 250.
+
+Also include other relevant official broad-market variants where available.
+
+B. Sectoral indices
+
+Discover and include the major available sectors, such as:
+
+- NIFTY BANK.
+- NIFTY FINANCIAL SERVICES.
+- NIFTY FINANCIAL SERVICES 25/50 variants where available.
+- NIFTY IT.
+- NIFTY AUTO.
+- NIFTY FMCG.
+- NIFTY PHARMA.
+- NIFTY HEALTHCARE.
+- NIFTY METAL.
+- NIFTY REALTY.
+- NIFTY OIL & GAS.
+- NIFTY MEDIA.
+- NIFTY CONSUMER DURABLES.
+- NIFTY PRIVATE BANK.
+- NIFTY PSU BANK.
+- NIFTY ENERGY.
+- NIFTY INFRASTRUCTURE.
+- Other officially maintained sectoral categories.
+
+Verify names and current availability through the authoritative index catalogue. Do not assume every example remains active.
+
+C. Thematic indices
+
+Include available thematic indices such as:
+
+- Infrastructure.
+- Consumption.
+- CPSE.
+- MNC.
+- India Manufacturing.
+- India Tourism.
+- India Defence.
+- Housing.
+- Other officially maintained thematic indices.
+
+D. Factor and strategy indices
+
+This category is particularly important.
+
+Discover and include available factor/strategy indices such as:
+
+- Momentum.
+- Value.
+- Quality.
+- Low Volatility.
+- Alpha.
+- Equal Weight.
+- Multi-factor.
+- Alpha Low Volatility.
+- Quality Low Volatility.
+- Other officially maintained factor combinations.
+
+Examples to validate against the official catalogue include:
+
+- NIFTY 50 Value 20.
+- NIFTY 50 Momentum 30.
+- NIFTY 200 Momentum 30.
+- NIFTY 200 Quality 30.
+- NIFTY 200 Alpha 30.
+- NIFTY 200 Value 30.
+- NIFTY 100 Equal Weight.
+- NIFTY 50 Equal Weight.
+- NIFTY 500 Momentum 50.
+- NIFTY 500 Quality 50.
+- NIFTY 500 Value 50.
+- NIFTY 500 Low Volatility 50.
+- Other active official factor and multi-factor indices.
+
+These examples are a discovery checklist, not a substitute for validating the current official list.
+
+9.3 Index Analysis dashboard
+
+Build an index overview page.
+
+Provide filters for:
+
+- Category.
+- Subcategory.
+- Symbol.
+- Availability.
+- Relative strength.
+- Stage.
+- Trend.
+- Timeframe.
+
+Display a sortable table:
+
+Field| Description
+Index| Official index name
+Category| Broad/Sector/Thematic/Factor
+Latest close| Latest completed close
+1W return| Weekly performance
+1M return| Monthly performance
+3M return| Quarterly performance
+6M return| Half-year performance
+1Y return| Annual performance
+RSI| Latest RSI
+ATR %| ATR relative to close
+EMA 50| Above/below
+EMA 200| Above/below
+RS vs benchmark| Relative performance
+Stage| Stage Analysis result
+RRG quadrant| Current quadrant
+
+Returns must be calculated using correctly aligned completed market data.
+
+9.4 Index Explorer
+
+Click an index to open an Index Explorer page.
+
+Include:
+
+- Candlestick chart.
+- EMA 10/20/30/50/100/200.
+- RSI.
+- ATR.
+- Volume where available.
+- RS Line.
+- Stage Analysis.
+- S/R zones.
+- Previous 10-day high/low.
+- Breakout and breakdown markers.
+- RRG position and historical trail.
+- Relative performance against selected benchmark.
+
+Allow timeframes:
+
+- 1H.
+- 4H.
+- 1D.
+- 1W.
+
+Where reliable intraday index data is unavailable, clearly display the limitation rather than manufacturing data.
+
+---
+
+10. Feature 7 — Stage Analysis and RS Line
+
+This feature must be implemented using my existing repository logic.
+
+Source files:
+
+- "rs_line.txt"
+- "stage_analysis.txt"
+
+Search for any other supporting implementation, setup or configuration files.
+
+10.1 Source-of-truth rule
+
+The existing source files define my Stage Analysis methodology.
+
+Do not automatically substitute:
+
+- Generic Weinstein stages.
+- Generic EMA/MA crossover rules.
+- A standard RS rating.
+- An unrelated Stage Analysis implementation from the internet.
+
+Implement the logic found in my files.
+
+If the source files include conditions that differ from standard terminology, retain my conditions and document the behaviour.
+
+10.2 RS Line
+
+Implement the RS Line calculation exactly as specified by "rs_line.txt" and any supporting source code.
+
+Requirements:
+
+- Preserve the original comparison instrument.
+- Preserve the original formula.
+- Preserve the original smoothing and periods.
+- Preserve crossover and trend conditions.
+- Preserve timeframe assumptions.
+- Preserve the original plotting logic where it conveys calculation behaviour.
+- Avoid future leakage and repainting.
+
+Display the RS Line in a separate pane.
+
+Provide the current RS value and any derived state that the source logic defines.
+
+Allow the comparison benchmark to be changed only when doing so does not alter the original methodology. If the original source hardcodes a benchmark, expose the existing value as a configuration option only after documenting the effect of that change.
+
+10.3 Stage Analysis
+
+Translate "stage_analysis.txt" and associated code into a backend Stage Analysis engine.
+
+The implementation must preserve all original conditions and setup parameters.
+
+Include the exact stages and transition logic defined in the source material.
+
+Do not assume that the standard four-stage methodology is identical to my implementation.
+
+For each stock and index, calculate the relevant stage using completed candles only.
+
+If the existing implementation defines intermediate or transitional states, preserve them.
+
+10.4 Stage Analysis UI
+
+Add a Stage Analysis tab and filters.
+
+For each stock/index, display:
+
+- Stage classification.
+- Stage transition date, if defined by the source rules.
+- RS Line status.
+- Relevant moving averages.
+- Trend condition.
+- Relevant indicator conditions.
+- Explanation of why the instrument received the stage classification.
+- Source configuration version.
+
+Show the relevant calculations and evidence, rather than only displaying a stage number.
+
+Allow filters for each stage and RS condition.
+
+Allow the user to click a result and open the full chart with the Stage Analysis overlays.
+
+10.5 Stage Analysis testing
+
+Create comparison tests that verify the new Python implementation against the original source behaviour.
+
+Test:
+
+- Moving average calculations.
+- RS Line.
+- Stage conditions.
+- Transitions.
+- Boundary cases.
+- Insufficient history.
+- Missing data.
+- Incomplete candle exclusion.
+- As-of historical correctness.
+
+If original Pine Script code is executable in TradingView, provide a documented method to compare output values against Python for selected symbols and dates.
+
+Do not claim exact parity without performing the comparison.
+
+---
+
+11. Unified chart and scanner integration
+
+All new analytical features must work together within the same chart.
+
+For example, when opening a stock, the chart should allow the user to enable:
+
+- Existing detected pattern.
+- Support/resistance.
+- EMA 10/20/30/50/100/200.
+- RSI pane.
+- RSI divergence.
+- ATR pane.
+- Volume pane.
+- Marubozu markers.
+- Daily 10-day high/low levels.
+- Breakout markers.
+- RS Line.
+- Stage Analysis overlays.
+- User drawing annotations.
+
+Do not enable every overlay by default. Use clean defaults and user-controlled visibility.
+
+11.1 Chart settings
+
+Persist user preferences such as:
+
+- Enabled indicators.
+- EMA periods and visibility.
+- RSI period and levels.
+- ATR period.
+- Pane visibility.
+- Drawing visibility.
+- Selected benchmark.
+- Selected timeframe.
+- Chart layout.
+
+Do not mix personal chart preferences with detector configuration.
+
+11.2 Navigation
+
+The user should be able to navigate between:
+
+- Pattern Scanner.
+- Candlestick Scanner.
+- Breakout Scanner.
+- Indicator Scanner.
+- RRG.
+- Index Analysis.
+- Stage Analysis.
+- Stock/Index Chart Explorer.
+
+Provide a common symbol search that works for NSE stocks and supported indices.
+
+---
+
+12. API design
+
+Extend the existing APIs using current naming and response conventions.
+
+Do not break current endpoints unless a migration is necessary and documented.
+
+Add suitable endpoints for:
+
+Indicators
+
+- Calculate indicators for symbol/timeframe/date range.
+- Return EMA series.
+- Return RSI series.
+- Return ATR series.
+- Return RSI divergence detections.
+- Return EMA alignment/crossover status.
+
+Marubozu
+
+- Scan Marubozu by universe/timeframe/as-of.
+- Retrieve detections for a symbol.
+- Filter bullish/bearish.
+
+Breakouts
+
+- Scan 10-day high breakouts.
+- Scan 10-day low breakdowns.
+- Retrieve previous high/low levels.
+- Return confirmation and volume metrics.
+
+Index universe
+
+- List available indices.
+- Filter by category.
+- Return index details.
+- Return provider availability.
+
+Index analysis
+
+- Index overview.
+- Individual index chart.
+- Performance calculations.
+- Indicator results.
+- Stage Analysis result.
+- RS Line.
+
+RRG
+
+- Return current RRG coordinates.
+- Return historical trails.
+- Filter indices/categories.
+- Select benchmark.
+- Select as-of date.
+- Select RRG configuration.
+
+Stage Analysis
+
+- Scan stocks and indices.
+- Filter by stage.
+- Return RS Line values.
+- Return calculation details and explanation.
+
+API design requirements
+
+- Use Pydantic models.
+- Validate parameters.
+- Return explicit data availability status.
+- Include timestamps.
+- Include source and adjustment information where relevant.
+- Use configuration/version identifiers.
+- Avoid exposing stack traces.
+- Preserve existing error-handling conventions.
+
+---
+
+13. Database and caching
+
+Inspect the existing SQLite database before changing the schema.
+
+Reuse existing OHLCV tables and cache where possible.
+
+Add only necessary new tables or fields.
+
+Potential new entities:
+
+- Indicator calculation metadata.
+- Indicator cache metadata.
+- Marubozu detections.
+- Breakout detections.
+- Index registry.
+- Index provider mapping.
+- RRG calculations.
+- RRG snapshots/trails.
+- Stage Analysis results.
+- RS Line history.
+- Chart preferences.
+- Manual chart annotations.
+
+Do not duplicate full OHLCV data unnecessarily.
+
+Indicator caching must account for:
+
+- Symbol/index.
+- Timeframe.
+- Price basis.
+- Indicator name.
+- Indicator parameters.
+- Latest input candle timestamp.
+- Configuration version.
+
+A changed input candle or changed indicator configuration must invalidate affected cached calculations.
+
+Do not store stale indicator values as current values.
+
+Use appropriate database migration or schema-version mechanisms. Do not reset or delete existing user data.
+
+---
+
+14. Data and calculation correctness
+
+This extension must follow the existing completed-candle and no-look-ahead rules.
+
+14.1 Time and session handling
+
+Use "Asia/Kolkata" for NSE data and chart time display.
+
+Do not depend on the computer's timezone.
+
+14.2 Indicator consistency
+
+Make backend calculations the source of truth for:
+
+- EMA.
+- RSI.
+- ATR.
+- RS Line.
+- RSI divergence.
+- Stage Analysis.
+- Breakout reference levels.
+
+Use the same calculation outputs for scan results and charts.
+
+Do not compute one RSI in the backend and a subtly different RSI in the frontend.
+
+14.3 Missing and insufficient data
+
+Return explicit statuses for:
+
+- Data unavailable.
+- Insufficient lookback.
+- Incomplete input series.
+- Provider error.
+- Calculation not ready.
+
+Do not substitute zeros for missing indicator values.
+
+Do not create artificial history to make EMA 200, RRG or Stage Analysis appear available.
+
+14.4 Historical as-of behaviour
+
+For every scanner and indicator:
+
+- Respect selected as-of date.
+- Exclude future candles.
+- Use only confirmed pivots.
+- Use only completed weekly candles for RRG.
+- Avoid using current membership to classify historical index or F&O membership unless historical membership data exists.
+
+---
+
+15. Configuration
+
+Place configurable values in the existing configuration system.
+
+Do not scatter thresholds across detector code or frontend components.
+
+At minimum, configure:
+
+Marubozu
+
+- Minimum body ratio.
+- Maximum upper wick ratio.
+- Maximum lower wick ratio.
+- Volume lookback.
+
+Breakout
+
+- Lookback days.
+- Break buffer ATR multiple.
+- Confirmation mode.
+- Volume lookback.
+- Optional minimum volume ratio.
+
+EMA
+
+- Period list.
+- Crossover combinations.
+
+RSI
+
+- Period.
+- Overbought level.
+- Oversold level.
+- Divergence pivot lookback.
+- Minimum price difference.
+- Minimum RSI difference.
+- Maximum pivot separation.
+
+ATR
+
+- Period.
+- Smoothing method.
+
+RRG
+
+- Benchmark.
+- Relative strength smoothing.
+- Momentum smoothing.
+- Trail length.
+- Weekly lookback.
+
+Stage Analysis
+
+- Use the source-defined defaults and configuration.
+- Do not invent replacement values.
+
+Record configuration version/hash where calculated output is persisted.
+
+---
+
+16. Testing strategy
+
+Do not consider the implementation complete simply because the UI renders.
+
+16.1 Regression tests
+
+All existing functionality must remain operational.
+
+Test:
+
+- Existing 17 patterns.
+- Support/resistance.
+- Pattern quality.
+- Lifecycle events.
+- Scan history.
+- F&O filtering.
+- Existing charts.
+- Existing API endpoints.
+- Existing database persistence.
+
+Do not regress the completed screener.
+
+16.2 Marubozu tests
+
+Positive and negative tests for:
+
+- Bullish Marubozu.
+- Bearish Marubozu.
+- Large body but excessive wick.
+- Body below threshold.
+- Zero-range candle.
+- Missing OHLC.
+- Incomplete candle.
+
+16.3 Breakout tests
+
+Test:
+
+- True 10-day high breakout.
+- True 10-day low breakdown.
+- Current candle excluded from reference window.
+- Intraday chart displaying daily-derived levels.
+- One-close confirmation.
+- Two-close confirmation.
+- Break buffer.
+- False breakout.
+- Insufficient daily history.
+- Historical as-of correctness.
+
+16.4 Indicator tests
+
+Test:
+
+- EMA values against known reference data.
+- EMA warm-up.
+- RSI against known reference data.
+- RSI flat-price behaviour.
+- ATR against known reference data.
+- ATR warm-up.
+- RSI bullish divergence.
+- RSI bearish divergence.
+- Unconfirmed pivot not reported as confirmed.
+- No future leakage.
+
+16.5 RRG tests
+
+Test:
+
+- RS ratio calculations.
+- RS momentum calculations.
+- Quadrant classification.
+- Weekly alignment.
+- Incomplete weekly candle exclusion.
+- Missing benchmark data.
+- Insufficient index history.
+- Trail ordering.
+- Historical as-of correctness.
+- Benchmark switching.
+
+16.6 Index Analysis tests
+
+Test:
+
+- Index registry.
+- Symbol-provider mappings.
+- Category filters.
+- Unsupported index handling.
+- Data availability.
+- Return calculations.
+- Indicator calculations.
+- Index chart.
+- Historical index data correctness.
+
+16.7 Stage Analysis tests
+
+Test source-derived conditions and transitions.
+
+Compare the Python result against the original source logic.
+
+If some source behaviours cannot be verified programmatically, document them and provide test cases for manual comparison.
+
+16.8 Frontend tests
+
+Test:
+
+- New dashboard navigation.
+- Indicator visibility controls.
+- Multiple EMA overlays.
+- RSI/ATR panes.
+- Divergence markers.
+- Marubozu markers.
+- Breakout level overlays.
+- RRG chart interaction.
+- Index Explorer.
+- Stage Analysis display.
+- Drawing interactions.
+- Drawing persistence.
+- Chart resize and cleanup.
+- Frontend production build.
+
+---
+
+17. Implementation sequence
+
+Do not implement everything in one large unverified change.
+
+Use these work packages, while keeping a single integrated application.
+
+P1 — Indicators and candlestick/breakout scanning   (E1 in code/docs)
+
+Implement:
+
+- Marubozu.
+- 10-day high breakout.
+- 10-day low breakdown.
+- EMA 10/20/30/50/100/200.
+- EMA alignment and crossovers.
+- RSI.
+- ATR.
+- RSI divergence.
+- Indicator panes.
+- Basic charting tools.
+- Regression tests.
+
+Acceptance:
+
+- Existing pattern screener remains functional.
+- Indicators match backend values and chart values.
+- New scanners produce explainable results.
+- Drawing tools work and persist.
+- Frontend build passes.
+
+P2 — RRG and Index Analysis   (E2 in code/docs)
+
+Implement:
+
+- Index registry.
+- Official index discovery/validation.
+- Provider mappings.
+- Broad-market index coverage.
+- Sectoral index coverage.
+- Thematic index coverage.
+- Factor/strategy index coverage.
+- Index Analysis dashboard.
+- Index Explorer.
+- RRG calculation.
+- Interactive RRG graph.
+- RRG tests.
+
+Acceptance:
+
+- Index universe is source-backed and maintainable.
+- Unavailable indices are clearly identified.
+- RRG uses completed weekly data.
+- Benchmark selection works.
+- Clicking an RRG point opens the relevant index.
+- Historical RRG trails are correct.
+
+P3 — Stage Analysis and integration   (E3 in code/docs)
+
+Implement:
+
+- Full audit of "rs_line.txt".
+- Full audit of "stage_analysis.txt".
+- Related source code inspection.
+- RS Line Python implementation.
+- Stage Analysis Python implementation.
+- Stage Analysis scanner.
+- Stage Analysis chart overlays.
+- Index and stock Stage Analysis.
+- Source-to-code documentation.
+- Source-comparison tests.
+- Unified chart controls.
+
+Acceptance:
+
+- Implementation follows the source files rather than generic rules.
+- RS Line and Stage Analysis calculations are explainable.
+- Stage conditions are visible in the UI.
+- Tests verify the translated logic.
+- Existing application features remain operational.
+
+---
+
+18. UI design
+
+Maintain the application's existing dark theme and visual language.
+
+Do not redesign the entire application unnecessarily.
+
+Add a left navigation or equivalent navigation structure:
+
+1. Pattern Scanner.
+2. Candlestick Scanner.
+3. Breakout Scanner.
+4. Indicator Scanner.
+5. RRG.
+6. Index Analysis.
+7. Stage Analysis.
+
+Use the existing chart explorer as the common chart component for both stocks and indices.
+
+Keep the interface clean. Do not show every indicator and every chart overlay by default.
+
+Allow the user to configure visible indicators and persist preferences.
+
+All pages must be responsive and usable on a desktop browser.
+
+---
+
+19. Documentation
+
+Update README and add feature-specific documentation:
+
+- "docs/indicators.md"
+- "docs/marubozu-breakout.md"
+- "docs/charting-tools.md"
+- "docs/rrg.md"
+- "docs/index-universe.md"
+- "docs/stage-analysis-implementation.md"
+
+Document:
+
+- Formula.
+- Data source.
+- Default parameters.
+- Timeframe.
+- Completed-candle behaviour.
+- Limitations.
+- Configuration.
+- API.
+- Test coverage.
+
+For RRG, explicitly identify the calculation as an internally implemented RRG-style methodology rather than claiming exact proprietary JdK compatibility.
+
+For Stage Analysis, cite the source filename and explain how each major rule maps to the implementation.
+
+---
+
+20. Final implementation report
+
+When work is complete, provide a factual report containing:
+
+1. Existing architecture inspected.
+2. Existing features preserved.
+3. Source files found and inspected for Stage Analysis.
+4. New files and modules created.
+5. Existing files modified.
+6. Marubozu implementation.
+7. Breakout implementation.
+8. Indicator calculations.
+9. RSI divergence implementation.
+10. Charting tools implemented.
+11. RRG calculation and visualization.
+12. Index categories and number of successfully mapped indices.
+13. Data providers and unavailable indices.
+14. Stage Analysis implementation and source mapping.
+15. Database changes and migration status.
+16. API changes.
+17. Backend test results.
+18. Frontend build results.
+19. Regression test results.
+20. Known limitations.
+21. Exact commands to run the application and tests.
+
+Paste actual test output or meaningful summaries.
+
+Do not claim that:
+
+- An index is supported unless its data mapping has been verified.
+- An indicator is accurate without reference-data tests.
+- RRG reproduces proprietary JdK values exactly.
+- Stage Analysis matches my source logic without comparison.
+- Chart tools work without interaction testing.
+- Existing features remain intact without regression tests.
+
+If live data access is unavailable, use deterministic fixtures for implementation testing and clearly distinguish fixture results from live-market verification.
+
+---
+
+21. Final instruction
+
+The objective is to extend the existing Indian Price Action Screener into a practical technical-analysis platform covering:
+
+- Price-action patterns.
+- Candlestick patterns.
+- Breakout and breakdown scanning.
+- EMA/RSI/ATR indicators.
+- RSI divergence.
+- Interactive charting.
+- Sector and factor rotation.
+- Comprehensive NSE index analysis.
+- My own Stage Analysis and RS Line methodology.
+
+Keep the implementation explainable, modular and reliable.
+
+Do not rebuild working components unnecessarily. Do not replace my Stage Analysis logic with generic rules. Do not hardcode unverified index mappings. Do not silently mix different market-price bases. Do not introduce look-ahead bias.
+
+Start by auditing the existing repository and locating the Stage Analysis source files. Then implement the work packages in order, testing each package before proceeding.
+
+Make reasonable engineering decisions without asking unnecessary questions. Document assumptions and blockers. Deliver working functionality, not just an implementation plan.

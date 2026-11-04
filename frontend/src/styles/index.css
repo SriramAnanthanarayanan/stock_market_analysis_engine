@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background: #052232;
+  color: #e6edf0;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-line bg-panel;
+  }
+  .label {
+    @apply text-[11px] font-medium uppercase tracking-wide text-muted;
+  }
+  .ctl {
+    @apply h-8 rounded-md border border-line bg-page px-2 text-sm text-ink outline-none focus:border-accent;
+  }
+  .btn {
+    @apply inline-flex h-8 items-center gap-1.5 rounded-md border border-line bg-panel2 px-3 text-sm text-ink transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn border-accent/60 bg-accent/15 text-accent hover:bg-accent/25;
+  }
+  .chip {
+    @apply inline-flex h-7 items-center rounded-md border border-line px-2.5 text-xs text-muted transition hover:text-ink;
+  }
+  .chip-on {
+    @apply border-accent/70 bg-accent/15 text-accent;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}

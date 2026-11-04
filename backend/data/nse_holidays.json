@@ -1,0 +1,225 @@
+{
+  "_note": "NSE capital-market trading holidays. Current year refreshed from the NSE holiday-master API; earlier years are a bundled transcription of NSE circulars - verify before relying on them.",
+  "years": {
+    "2024": {
+      "source": "bundled (transcribed from NSE circulars; cross-checked against provider daily bars)",
+      "holidays": [
+        {
+          "date": "2024-01-22",
+          "description": "Special holiday (Ram Lalla Pran Pratishtha)"
+        },
+        {
+          "date": "2024-01-26",
+          "description": "Republic Day"
+        },
+        {
+          "date": "2024-03-08",
+          "description": "Mahashivratri"
+        },
+        {
+          "date": "2024-03-25",
+          "description": "Holi"
+        },
+        {
+          "date": "2024-03-29",
+          "description": "Good Friday"
+        },
+        {
+          "date": "2024-04-11",
+          "description": "Id-Ul-Fitr (Ramadan Eid)"
+        },
+        {
+          "date": "2024-04-17",
+          "description": "Shri Ram Navmi"
+        },
+        {
+          "date": "2024-05-01",
+          "description": "Maharashtra Day"
+        },
+        {
+          "date": "2024-05-20",
+          "description": "General Parliamentary Elections (Mumbai)"
+        },
+        {
+          "date": "2024-06-17",
+          "description": "Bakri Id"
+        },
+        {
+          "date": "2024-07-17",
+          "description": "Moharram"
+        },
+        {
+          "date": "2024-08-15",
+          "description": "Independence Day"
+        },
+        {
+          "date": "2024-10-02",
+          "description": "Mahatma Gandhi Jayanti"
+        },
+        {
+          "date": "2024-11-01",
+          "description": "Diwali Laxmi Pujan"
+        },
+        {
+          "date": "2024-11-15",
+          "description": "Gurunanak Jayanti"
+        },
+        {
+          "date": "2024-11-20",
+          "description": "Maharashtra Assembly Elections"
+        },
+        {
+          "date": "2024-12-25",
+          "description": "Christmas"
+        }
+      ]
+    },
+    "2025": {
+      "source": "bundled (transcribed from NSE circulars; cross-checked against provider daily bars)",
+      "holidays": [
+        {
+          "date": "2025-02-26",
+          "description": "Mahashivratri"
+        },
+        {
+          "date": "2025-03-14",
+          "description": "Holi"
+        },
+        {
+          "date": "2025-03-31",
+          "description": "Id-Ul-Fitr (Ramadan Eid)"
+        },
+        {
+          "date": "2025-04-10",
+          "description": "Shri Mahavir Jayanti"
+        },
+        {
+          "date": "2025-04-14",
+          "description": "Dr. Baba Saheb Ambedkar Jayanti"
+        },
+        {
+          "date": "2025-04-18",
+          "description": "Good Friday"
+        },
+        {
+          "date": "2025-05-01",
+          "description": "Maharashtra Day"
+        },
+        {
+          "date": "2025-08-15",
+          "description": "Independence Day"
+        },
+        {
+          "date": "2025-08-27",
+          "description": "Ganesh Chaturthi"
+        },
+        {
+          "date": "2025-10-02",
+          "description": "Mahatma Gandhi Jayanti/Dussehra"
+        },
+        {
+          "date": "2025-10-21",
+          "description": "Diwali Laxmi Pujan"
+        },
+        {
+          "date": "2025-10-22",
+          "description": "Diwali Balipratipada"
+        },
+        {
+          "date": "2025-11-05",
+          "description": "Prakash Gurpurb Sri Guru Nanak Dev"
+        },
+        {
+          "date": "2025-12-25",
+          "description": "Christmas"
+        }
+      ]
+    },
+    "2026": {
+      "source": "NSE holiday-master API (CM segment)",
+      "fetched_at": "2026-11-04T08:30:02+05:30",
+      "holidays": [
+        {
+          "date": "2026-01-15",
+          "description": "Municipal Corporation Election - Maharashtra"
+        },
+        {
+          "date": "2026-01-26",
+          "description": "Republic Day"
+        },
+        {
+          "date": "2026-02-15",
+          "description": "Mahashivratri"
+        },
+        {
+          "date": "2026-03-03",
+          "description": "Holi"
+        },
+        {
+          "date": "2026-03-21",
+          "description": "Id-Ul-Fitr (Ramadan Eid)"
+        },
+        {
+          "date": "2026-03-26",
+          "description": "Shri Ram Navami"
+        },
+        {
+          "date": "2026-03-31",
+          "description": "Shri Mahavir Jayanti"
+        },
+        {
+          "date": "2026-04-03",
+          "description": "Good Friday"
+        },
+        {
+          "date": "2026-04-14",
+          "description": "Dr. Baba Saheb Ambedkar Jayanti"
+        },
+        {
+          "date": "2026-05-01",
+          "description": "Maharashtra Day"
+        },
+        {
+          "date": "2026-05-28",
+          "description": "Bakri Id"
+        },
+        {
+          "date": "2026-06-26",
+          "description": "Muharram"
+        },
+        {
+          "date": "2026-08-15",
+          "description": "Independence Day"
+        },
+        {
+          "date": "2026-09-14",
+          "description": "Ganesh Chaturthi"
+        },
+        {
+          "date": "2026-10-02",
+          "description": "Mahatma Gandhi Jayanti"
+        },
+        {
+          "date": "2026-10-20",
+          "description": "Dussehra"
+        },
+        {
+          "date": "2026-11-08",
+          "description": "Diwali Laxmi Pujan*"
+        },
+        {
+          "date": "2026-11-10",
+          "description": "Diwali-Balipratipada"
+        },
+        {
+          "date": "2026-11-24",
+          "description": "Prakash Gurpurb Sri Guru Nanak Dev"
+        },
+        {
+          "date": "2026-12-25",
+          "description": "Christmas"
+        }
+      ]
+    }
+  }
+}

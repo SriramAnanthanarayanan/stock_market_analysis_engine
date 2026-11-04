@@ -1,0 +1,2088 @@
+# Master Build Prompt — Indian Price Action Screener
+
+## 1. Role and objective
+
+Act as a senior Python engineer, quantitative developer and frontend engineer.
+
+Build a complete, working **Indian Price Action Screener** in the current project folder.
+
+This is a personal market-analysis application for NSE-listed stocks. It is not a trading execution system, stock advisory service or SaaS product.
+
+The application must identify predefined chart patterns using deterministic numerical rules, display those patterns on interactive candlestick charts, and eventually allow the user to evaluate and improve detection accuracy using manually labelled historical charts.
+
+Do not just create a skeleton, mockup or architecture proposal. Implement the selected phase, run the tests and frontend build, fix issues, and provide evidence of what actually works.
+
+### Core principles
+
+1. Prefer deterministic numerical rules over subjective chart interpretation.
+2. Prefer missing a questionable pattern over reporting a false pattern.
+3. Never silently invent missing data or assume historical information that is unavailable.
+4. All detection thresholds must be configurable and versioned.
+5. The backend is the source of truth for detection and pattern geometry.
+6. The frontend must display the backend's detection results, not independently rediscover patterns.
+7. A detected pattern must be explainable: the user must be able to inspect the candles, boundaries, swing points, touches and metrics that caused the detection.
+8. Do not describe a geometric quality score as a probability of success.
+9. Do not claim that a detector is validated against real charts until it has been evaluated using human-labelled data.
+10. Do not use intuition alone to change thresholds. Evaluate changes against a labelled dataset.
+
+---
+
+# 2. Execution instructions
+
+This master specification describes the complete application. Implement it in three development phases.
+
+**Start with P1 immediately.** Do not attempt to implement the entire project in one unstructured coding pass.
+
+| Phase | Scope | Outcome |
+|---|---|---|
+| P1 — Core Screener | Foundation, data ingestion, first nine patterns, dashboard, chart explorer | Working initial screener |
+| P2 — Advanced Patterns | Remaining eight patterns, support/resistance integration, expanded tests | All 17 patterns available |
+| P3 — History & Evaluation | Pattern history, lifecycle tracking, chart labelling, exports, precision/recall evaluation | Measurable and improvable detector |
+
+The three phases are implementation stages, not separate products. The first release is complete only after P2, when all 17 patterns are available.
+
+After completing each phase:
+
+- Run all relevant backend tests.
+- Run the frontend production build.
+- Fix all failures before reporting completion.
+- Keep the project runnable.
+- Update the README and implementation notes.
+- Do not claim that a later phase has been implemented.
+
+P1 must establish reusable interfaces for all future detectors, chart geometry, lifecycle tracking and configuration versioning.
+
+---
+
+# 3. Product scope
+
+## 3.1 Market and universe
+
+Market: NSE India only.
+
+Primary universe:
+
+- NIFTY 500 stocks.
+
+Additional universe:
+
+- NSE F&O stocks.
+
+Each stock must have an F&O membership flag:
+
+- `YES`
+- `NO`
+- `UNKNOWN`
+
+The UI must support:
+
+- All stocks
+- F&O only
+- Non-F&O only
+
+Do not infer F&O membership from trading volume, liquidity, market capitalisation or current market behaviour.
+
+Historical F&O membership must be stored as dated snapshots. Before the first available snapshot, historical membership must be `UNKNOWN`, not inferred from today's list.
+
+## 3.2 Timeframes
+
+Support:
+
+- 1H
+- 4H
+- 1D
+- 1W
+
+All pattern detection must use completed candles only.
+
+Historical scans must use only data that would have been available as of the selected date. Do not use future candles to establish historical patterns, pivots, breakouts, quality scores or lifecycle states.
+
+## 3.3 First-release pattern catalogue
+
+Implement all 17 patterns.
+
+**Channels and ranges**
+
+1. Falling Channel
+2. Rising Channel
+3. Horizontal Channel
+4. Rectangle / Sideways Range
+
+**Triangles and wedges**
+
+5. Ascending Triangle
+6. Descending Triangle
+7. Symmetrical Triangle
+8. Falling Wedge
+9. Rising Wedge
+
+**Continuation patterns**
+
+10. Bullish Flag
+11. Bearish Flag
+12. Bullish Pennant
+13. Bearish Pennant
+
+**Reversal patterns**
+
+14. Double Top
+15. Double Bottom
+16. Head & Shoulders
+17. Inverse Head & Shoulders
+
+Support and resistance zones are shared analytical features, not additional named patterns.
+
+Do not implement Elliott Wave, Wyckoff, Smart Money Concepts, order blocks, liquidity sweeps, complex harmonic patterns such as Gartley/Bat/Butterfly, or other highly subjective methods.
+
+---
+
+# 4. Technology stack and project architecture
+
+Build a modular monolith. Avoid unnecessary infrastructure.
+
+## 4.1 Backend
+
+- Python 3.11+
+- FastAPI
+- Uvicorn
+- pandas
+- NumPy
+- yfinance
+- requests
+- lxml
+- certifi
+- truststore
+- APScheduler v3 (`apscheduler<4`)
+- SQLAlchemy Core only
+- SQLite
+
+Backend virtual environment:
+
+`backend/.venv`
+
+Backend port:
+
+`8031`
+
+Use Pydantic for API request/response validation.
+
+Use SQLAlchemy Core. Do not use SQLAlchemy ORM.
+
+## 4.2 Frontend
+
+- React
+- Vite
+- Tailwind CSS v3
+- Lightweight Charts v5
+
+Frontend port:
+
+`5191`
+
+Configure Vite with `strictPort: true` and proxy `/api` to:
+
+`http://127.0.0.1:8031`
+
+Install the compatible Tailwind v3 dependencies:
+
+`tailwindcss@3 postcss autoprefixer`
+
+Do not accidentally install Tailwind v4.
+
+## 4.3 Explicitly avoid
+
+Do not introduce:
+
+- Microservices
+- Kubernetes
+- Redis
+- Celery
+- Vector databases
+- LangChain
+- RAG infrastructure
+- Separate distributed workers
+- Complex event-streaming infrastructure
+- Unnecessary cloud services
+
+Use the simplest implementation that meets the requirements.
+
+## 4.4 Suggested project layout
+
+Adapt the exact structure when necessary, but maintain clear module boundaries.
+
+```text
+project/
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   ├── database.py
+│   │   ├── models.py
+│   │   ├── api/
+│   │   ├── data/
+│   │   ├── providers/
+│   │   ├── indicators/
+│   │   ├── patterns/
+│   │   │   ├── base.py
+│   │   │   ├── shared.py
+│   │   │   ├── parallel.py
+│   │   │   ├── converging.py
+│   │   │   ├── continuation.py
+│   │   │   └── reversals.py
+│   │   ├── lifecycle/
+│   │   ├── analytics/
+│   │   ├── scheduler.py
+│   │   ├── net.py
+│   │   └── selftest.py
+│   ├── data/
+│   ├── cache/
+│   ├── tests/
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   ├── charts/
+│   │   ├── api/
+│   │   └── styles/
+│   └── package.json
+├── README.md
+└── docs/
+    ├── pattern-rules.md
+    ├── data-sources.md
+    └── validation.md
+```
+
+Keep the architecture simple. Do not create modules that only wrap one trivial function without a reason.
+
+---
+
+# 5. NSE universe and F&O membership
+
+## 5.1 NIFTY 500
+
+Candidate official source:
+
+`https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv`
+
+Implement a universe refresh process.
+
+Requirements:
+
+- Use browser-like request headers where required.
+- Validate the downloaded response and its expected columns.
+- Store the most recent successful universe at `backend/data/nifty500.csv`.
+- Store symbol, company name, ISIN and industry where available.
+- Record refresh timestamp and membership status.
+- Preserve the previous successful data if refresh fails.
+- Never silently return an empty universe because a live download failed.
+- Record refresh errors clearly.
+
+Use an alternate Nifty Indices source only after validating its current URL and file schema. Do not invent an unverified fallback URL.
+
+Append `.NS` when constructing Yahoo Finance tickers.
+
+## 5.2 F&O universe
+
+Candidate official source:
+
+`https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv`
+
+Validate the URL, file schema and whether the source actually provides a complete usable F&O universe before relying on it.
+
+Do not assume that a market-lot file automatically represents every required membership field.
+
+Store the latest successful list at:
+
+`backend/data/nse_fno.csv`
+
+Maintain dated F&O membership snapshots.
+
+A historical query must use the applicable snapshot when one exists. Before the first snapshot, return `UNKNOWN`.
+
+---
+
+# 6. Market data ingestion
+
+## 6.1 Provider abstraction
+
+Initially use yfinance.
+
+Keep market data access behind a provider interface so another provider can replace Yahoo Finance without rewriting the pattern detectors.
+
+Do not allow detector code to call yfinance directly.
+
+## 6.2 Download requirements
+
+| Timeframe | Provider interval | Initial period |
+|---|---|---|
+| 1H | 1h | 2 years, fallback to 1 year |
+| 4H | Reuse 1H data | No separate download |
+| 1D | 1d | 2 years |
+| 1W | 1wk | 5 years |
+
+For 1H:
+
+- Request `period="2y"` and `interval="1h"`.
+- If unavailable, fall back to `period="1y"`.
+- Record the actual available history and any provider limitations.
+
+For 4H:
+
+- Reuse the downloaded 1H data.
+- Do not download the same underlying hourly data twice.
+- Resample using NSE session boundaries.
+
+For batch downloads:
+
+- Use batches of approximately 100 tickers.
+- Use `yf.download` with `group_by="ticker"`, `auto_adjust=True`, `threads=True`, `progress=False`.
+- Retry failed or empty symbols individually once.
+- Use bounded retries with exponential backoff and jitter.
+- Record per-symbol errors.
+- Allow partial success.
+- Cache data locally.
+
+Implement a simple incremental fetch:
+
+- Re-fetch an overlap of the previous five candles.
+- Deduplicate by timestamp.
+- Replace overlapping historical candles with newly fetched provider values.
+- Do not append duplicate timestamps.
+- Preserve a clear full-refresh option.
+- Document provider limitations and the cache strategy.
+
+## 6.3 OHLCV rules
+
+Aggregation must use:
+
+- Open: first open
+- High: maximum high
+- Low: minimum low
+- Close: last close
+- Volume: sum
+
+Handle:
+
+- NSE holidays
+- Missing sessions
+- Duplicate candles
+- Incomplete candles
+- Provider gaps
+- Timezone conversion
+- Invalid OHLC rows
+
+Do not manufacture candles to fill missing data.
+
+## 6.4 NSE timezone and sessions
+
+All NSE session and candle-boundary logic must use:
+
+`Asia/Kolkata`
+
+Regular NSE equity session:
+
+- Open: 09:15 IST
+- Close: 15:30 IST
+
+Do not rely on the machine's local timezone or assume UTC.
+
+### 4H resampling
+
+Use session-aligned bins:
+
+- First bin: 09:15–13:15 IST
+- Second bin: 13:15–15:30 IST
+
+The second bin is a shorter partial bar. This is intentional and must be documented.
+
+Do not resample from midnight or use generic four-hour clock boundaries.
+
+## 6.5 Candle completion
+
+Calculate bar-end timestamps using the relevant timeframe and NSE calendar.
+
+Drop any bar whose calculated completion time is later than the current time.
+
+Rules:
+
+- 1H and 4H: include only completed session-aligned bars.
+- 1D: the daily bar is incomplete while the session is still open.
+- 1W: complete only after the final trading session of the week has closed. This may not be Friday if there is a holiday.
+- Use the correct trading calendar for completion decisions.
+
+All pattern fitting, swing detection, breakout confirmation and quality scoring must exclude incomplete bars.
+
+The historical `asof` mode must use only completed candles available at or before that date.
+
+---
+
+# 7. Network and SSL handling
+
+On Windows, Yahoo Finance SSL requests may encounter certificate errors.
+
+Implement optional SSL configuration in `backend/app/net.py`.
+
+Before importing yfinance where practical:
+
+- Use certifi's CA bundle.
+- On Windows, collect certificates from `ssl.enum_certificates("ROOT")` and `"CA"` where available.
+- Build a combined CA bundle at `backend/.cache/ca_bundle.pem`.
+- Set `CURL_CA_BUNDLE`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`.
+- Use `truststore.inject_into_ssl()` where supported.
+
+Do not make application startup dependent on successful Windows certificate-store extraction. Log failures and continue with the default SSL configuration.
+
+Never disable TLS certificate verification as a workaround.
+
+---
+
+# 8. Pattern detection rules
+
+## 8.0 Important rule-design principles
+
+All numerical values in this section are **initial engineering defaults**. They are not validated universal technical-analysis thresholds and must not be described as proven optimal values.
+
+Every configurable parameter must live in:
+
+`backend/app/config.py`
+
+Use named configuration fields rather than scattering numeric literals across detector code.
+
+Include:
+
+- Parameter name
+- Current default
+- Description
+- Unit
+- Applicable patterns and timeframes
+- Configuration version
+
+Persist the configuration version, or a reproducible configuration hash, with each scan and detection.
+
+A parameter change must not silently rewrite previous scan results.
+
+### Shared definitions
+
+1. ATR = ATR(14), Wilder smoothing, using completed candles only.
+2. Swing lookback:
+   - `k=3` for channels, ranges, triangles, wedges and S/R.
+   - `k=5` for double tops, double bottoms and H&S patterns.
+   - Flags and pennants use raw bar highs/lows.
+3. Fit window ends at the newest completed bar minus three bars. These final three bars must not influence fitted pattern geometry because a fresh break can distort the lines.
+4. Status evaluation uses all completed bars, including the bars excluded from fitting.
+5. `L` = formation length in bars.
+6. `x` = bar index inside the formation window, starting at zero.
+
+### Swing point definitions
+
+For lookback `k`:
+
+- Swing high: high is greater than the previous `k` highs and greater than or equal to the next `k` highs.
+- Swing low: low is lower than the previous `k` lows and lower than or equal to the next `k` lows.
+
+A swing point is confirmed only after `k` subsequent completed bars are available.
+
+Do not use a future candle to confirm a swing in a historical as-of scan.
+
+### Anchored line
+
+Fit an OLS slope through the boundary's relevant swing points.
+
+Then shift the intercept so that the line passes through the extreme:
+
+- Upper line: maximum of `high − slope × x`.
+- Lower line: minimum of `low − slope × x`.
+
+### Parallel fit
+
+Use pooled regression with:
+
+- One shared slope.
+- Two separate intercepts.
+- Anchoring as defined above.
+
+### Independent boundary fit
+
+Fit upper and lower boundaries independently using their respective points, then anchor each line.
+
+Use independent boundary fits for geometry classification and convergence measurement.
+
+For parallel patterns, the final drawing geometry must use a shared-slope fit. Do not calculate convergence ratio from a shared-slope drawing fit because its width is constant by construction.
+
+### Width and movement
+
+For independent boundaries:
+
+- `W(x) = upper(x) − lower(x)`
+- `W0 = width at first fitted bar`
+- `W1 = width at last fitted bar`
+- `W_mean = mean width across the fitted window`
+- `CR = W1 / W0`
+
+Line movement:
+
+`M = slope × (L − 1)`
+
+For a common-slope fit, `M` is the shared boundary movement.
+
+### Line state for converging patterns
+
+Use independent slopes.
+
+Relative to `W0`:
+
+- Rising: `M > +0.15 × W0`
+- Falling: `M < −0.15 × W0`
+- Flat: otherwise
+
+Apply this line-state definition to triangles and wedges. The parallel-family classification uses its own explicit movement bands below.
+
+### Touch definition — important correction
+
+Touch tolerance:
+
+`tolerance = max(0.15 × W(x), 0.25 × ATR(14))`
+
+A swing high is an upper touch only if:
+
+`abs(upper(x) − swing_high_price) <= tolerance`
+
+A swing low is a lower touch only if:
+
+`abs(lower(x) − swing_low_price) <= tolerance`
+
+Do not use a one-sided difference such as `upper − high <= tolerance`, because a candle far above the boundary could incorrectly qualify.
+
+For flags and pennants, apply the same absolute-distance test to raw bar highs and lows. Touches must be at least two bars apart.
+
+### Touch spread
+
+The first and last touch on each boundary must be at least:
+
+`0.4 × L`
+
+bars apart.
+
+### Containment
+
+Calculate the share of bars from the first touch to the last fitted bar satisfying:
+
+- `high <= upper(x) + s`
+- `low >= lower(x) − s`
+
+Where:
+
+`s = max(0.05 × W(x), 0.1 × ATR)`
+
+### Closing trend
+
+Calculate OLS of closing prices from the first touch to the last fitted bar.
+
+R² threshold for rising and falling channels:
+
+`R² >= 0.50`
+
+### Break buffer
+
+A close is beyond a boundary only when it exceeds the boundary by at least:
+
+`0.1 × ATR`
+
+### Timeframe-specific defaults
+
+| Timeframe | Minimum move as % of start price | Width band as % of price |
+|---|---:|---:|
+| 1H | 2.5% | 1–15% |
+| 4H | 4% | 1.5–22% |
+| 1D | 6% | 3–30% |
+| 1W | 10% | 5–45% |
+
+These are initial defaults. Apply them consistently and expose them through configuration.
+
+---
+
+## 8.1 Parallel family: channels and ranges
+
+Patterns:
+
+- Falling Channel
+- Rising Channel
+- Horizontal Channel
+- Rectangle
+
+Candidate lengths:
+
+`40, 60, 90, 120 bars`
+
+Use:
+
+- Independent upper/lower fits for classification and parallelism measurement.
+- A common-slope parallel fit for final drawing geometry.
+
+### Shared gates
+
+- At least two upper touches.
+- At least two lower touches.
+- At least five total touches.
+- Each boundary must have at least one touch in the first half and one in the second half.
+- Parallelism error must be no more than 0.25.
+- Containment must be at least 88%.
+- Mean width as a percentage of the last fitted close must fall within the timeframe width band.
+
+Define parallelism error:
+
+`parallelism_error = abs(upper_slope − lower_slope) × (L − 1) / W_mean`
+
+Require:
+
+`parallelism_error <= 0.25`
+
+Do not use `CR` from the parallel drawing geometry as a convergence metric.
+
+### Classification
+
+| Pattern | Shared-slope movement rule | Additional gates |
+|---|---|---|
+| Falling Channel | `M <= −0.6 × W_mean` | Total drop >= timeframe minimum move; close OLS slope < 0; R² >= 0.50 |
+| Rising Channel | `M >= +0.6 × W_mean` | Total rise >= timeframe minimum move; close OLS slope > 0; R² >= 0.50 |
+| Horizontal Channel | `0.2 × W_mean < abs(M) < 0.6 × W_mean` | At least six total touches |
+| Rectangle | `abs(M) <= 0.2 × W_mean` | At least six total touches; close OLS R² < 0.30 |
+
+Rectangle means a flatter range. Horizontal Channel means a sideways formation with mild drift.
+
+Structures that fall between the channel movement threshold and the minimum timeframe move must be rejected rather than forced into a different label.
+
+### Width and movement consistency
+
+Use the family movement bands above as the authoritative classification rules. Do not also apply a conflicting flat/rising/falling classification threshold to this family.
+
+---
+
+## 8.2 Converging family: triangles and wedges
+
+Patterns:
+
+- Ascending Triangle
+- Descending Triangle
+- Symmetrical Triangle
+- Falling Wedge
+- Rising Wedge
+
+Candidate lengths:
+
+`30, 45, 60, 90, 120 bars`
+
+Use independent boundary fits.
+
+### Shared gates
+
+- At least two upper touches.
+- At least two lower touches.
+- At least five total touches.
+- Each boundary's touch spread must be at least `0.4 × L`.
+- `0.15 <= CR <= 0.60`.
+- This requires at least 40% narrowing without an excessively collapsed formation.
+- `CR` between 0.60 and 0.75 must not qualify for these patterns.
+- Containment at least 85%.
+- Initial width `W0 / first close` must be within the timeframe width band.
+- Record the line-intersection apex index for drawing and lifecycle evaluation.
+
+### Classification
+
+| Upper state | Lower state | Pattern |
+|---|---|---|
+| Flat | Rising | Ascending Triangle |
+| Falling | Flat | Descending Triangle |
+| Falling | Rising | Symmetrical Triangle |
+| Falling | Falling | Falling Wedge |
+| Rising | Rising | Rising Wedge |
+| Other combinations | | Reject |
+
+For falling and rising wedges:
+
+- Both lines must move in the same direction.
+- They must converge.
+- `CR` must meet the shared convergence rule.
+- Falling Wedge midline drop must meet the timeframe minimum move.
+- Rising Wedge midline rise must meet the timeframe minimum move.
+
+For a falling wedge, the upper line must fall faster than the lower line. For a rising wedge, the upper line must rise more slowly than the lower line. The convergence calculation must confirm this geometrically.
+
+Do not classify expanding formations as triangles or wedges.
+
+---
+
+## 8.3 Flags and pennants
+
+Patterns:
+
+- Bullish Flag
+- Bearish Flag
+- Bullish Pennant
+- Bearish Pennant
+
+Flags and pennants require a valid preceding impulse pole. A short consolidation without a valid pole must not be reported as a flag or pennant.
+
+Consolidation ends at the latest fitted completed bar. These are live formation detections.
+
+### Pole definition
+
+For a bullish pole:
+
+- `P_end` is the highest high before the consolidation.
+- Pole start is the lowest low in the 15 bars preceding `P_end`.
+- Pole length must be 3–15 bars, inclusive.
+- `H = P_end high − pole start low`.
+- ATR is measured at the pole start so the pole does not inflate its own ATR.
+- `H >= 3 × ATR`.
+- `H / pole_start_low` must meet the timeframe minimum move.
+- At least 60% of pole bars must close above the previous close.
+
+Mirror all conditions for a bearish pole.
+
+Enumerate eligible pole windows and consolidation lengths. Use the same deterministic candidate selection and deduplication rules for repeated candidates.
+
+### Consolidation definition
+
+Consolidation starts on the bar after `P_end`.
+
+| Rule | Bullish Flag | Bullish Pennant |
+|---|---|---|
+| Length | 5–25 bars and <= 3 × pole length | 5–20 bars and <= 3 × pole length |
+| Fit | Parallel fit on raw highs/lows | Independent fit on raw highs/lows |
+| Shape | `abs(1 − CR) <= 0.25` | `0.15 <= CR <= 0.60` |
+| Movement | Shared-slope move between `−0.5 × H` and `+0.1 × H` | Upper falling and lower rising |
+| Retracement | <= 50% of pole | <= 38% of pole |
+| Width | `W0 <= 0.5 × H` | `W0 <= 0.5 × H` |
+| Touches | At least two upper and two lower | At least two upper and two lower |
+| Containment | >= 85% | >= 85% |
+
+Bullish retracement:
+
+`(P_end_high − lowest_consolidation_low) / H`
+
+Bearish Flag:
+
+- Mirror the bullish shape.
+- Shared-slope movement between `−0.1 × H` and `+0.5 × H`.
+- Retracement = `(highest_consolidation_high − P_end_low) / H`.
+- Apply the same length, width, touch and containment requirements.
+
+Bearish Pennant:
+
+- Mirror the bullish pennant.
+- Upper line rising and lower line falling.
+- Apply the same length, convergence, retracement, width, touch and containment requirements.
+
+Volume contraction must be a quality component, not a mandatory validity gate.
+
+### Provisional flag and pennant state
+
+A valid pole followed by a preliminary consolidation of three or four completed bars may be reported as `Forming` when its preliminary direction, width and retracement conditions pass.
+
+It must not be reported as `Validated` until the minimum five-bar consolidation and all required structural gates pass.
+
+---
+
+## 8.4 Reversal patterns
+
+Patterns:
+
+- Double Top
+- Double Bottom
+- Head & Shoulders
+- Inverse Head & Shoulders
+
+Swing lookback:
+
+`k = 5`
+
+The latest pivot must be within the last 30 completed bars.
+
+Confirmed pivot requirement:
+
+A pivot is confirmed only after five subsequent completed bars.
+
+### Confirmed and provisional candidates
+
+Maintain two paths:
+
+1. **Confirmed candidate:** Uses confirmed swing points. It may become `Validated` when all gates pass.
+2. **Provisional candidate:** Uses a possible latest pivot that has not yet received five confirmation bars. It may become `Forming` but cannot be called `Validated`.
+
+Never use an unconfirmed pivot as a confirmed structural fact.
+
+### Double Top
+
+- `P2` = most recent confirmed swing high in the recency window.
+- `P1` = an earlier swing high 10–60 bars before P2.
+- If several P1 candidates qualify, select the one with the highest deterministic quality score; tie-break by the longer separation.
+- No bar between P1 and P2 may have a high above `min(P1, P2)`.
+- `T` = lowest low between P1 and P2.
+- `D = min(P1, P2) − T`.
+- `D >= 3 × ATR`, measured at P2.
+- `D / average_peak_price >= 0.5 × timeframe minimum move`.
+- Peak similarity must satisfy both:
+  - `abs(P1 − P2) <= 0.25 × D`
+  - `abs(P1 − P2) <= 0.03 × average_peak_price`
+- Therefore, the permitted peak difference is the smaller of those two limits.
+- Prior trend: `P1 − lowest_low_in_prior_window >= D`, where the prior window has the same number of bars as the P1-to-P2 separation.
+- Neckline is horizontal at T.
+
+Double Bottom is the exact inverse:
+
+- Two swing lows.
+- Intervening highest high.
+- Equivalent depth and similarity requirements.
+- Prior downward trend.
+- Horizontal neckline at the intervening high.
+
+### Head & Shoulders
+
+- `LS`, `H`, `RS` = three swing highs in order.
+- RS is the most recent confirmed swing high in the recency window.
+- LS-to-RS span must be 20–120 bars.
+- If multiple triples qualify, choose the highest deterministic quality score.
+- `T1` = lowest low between LS and H.
+- `T2` = lowest low between H and RS.
+- Neckline is the line through T1 and T2, extended right.
+- `HH = H − neckline_at_H_index`.
+- `HH >= 3 × ATR`, measured at the head.
+- Head prominence:
+  - `H − max(LS, RS) >= 0.2 × HH`
+  - Also `H − max(LS, RS) >= 0.03 × H`
+- Shoulder similarity must satisfy both:
+  - `abs(LS − RS) <= 0.3 × HH`
+  - `abs(LS − RS) <= 0.05 × average_shoulder_price`
+- Each shoulder must be at least `0.4 × HH` above the neckline at its index.
+- Time symmetry: `bars(LS→H) / bars(H→RS)` must be between 0.5 and 2.0.
+- Neckline tilt: `abs(T1 − T2) <= 0.5 × HH`.
+- Prior trend: `LS − lowest_low_in_prior_window >= HH`, where the prior window has the same number of bars as LS-to-RS.
+
+### Inverse Head & Shoulders
+
+Mirror all H&S rules:
+
+- Three swing lows.
+- Head lower than both shoulders.
+- Two intervening swing highs define the neckline.
+- Equivalent prominence, shoulder similarity, neckline tilt, time symmetry and prior-trend constraints.
+
+---
+
+## 8.5 Pattern precedence and exclusivity
+
+- Parallel family uses the parallelism test.
+- Converging family uses `0.15 <= CR <= 0.60`.
+- Do not classify the same geometry as both parallel and converging.
+- Flags and pennants are limited to 25 bars of consolidation.
+- Triangles are at least 30 bars.
+- Channels and ranges are at least 40 bars.
+- Flags and pennants require a valid pole.
+- Different families on the same stock/timeframe may coexist. Example: a Bullish Flag can exist inside a Falling Channel.
+- Across candidate lengths for the same pattern type, retain the highest quality. Ties go to the longer length.
+- Deduplicate detections of the same type when intersection-over-union of their formation bar ranges is at least 0.60. Keep higher quality; ties go to longer length.
+- Preserve genuinely different nested patterns when their geometries and formation windows are independently valid.
+
+### Rectangle versus Horizontal Channel
+
+Keep the two labels distinct:
+
+- Rectangle: movement <= 0.20 × mean width.
+- Horizontal Channel: movement > 0.20 and < 0.60 × mean width.
+
+### Pennant versus Symmetrical Triangle
+
+- If a qualifying preceding impulse pole exists and the consolidation meets pennant rules, classify it as a Pennant.
+- Do not report the same formation as a Symmetrical Triangle as well.
+- A larger independent triangle may coexist only when its formation window and geometry are genuinely distinct.
+
+---
+
+# 9. Support and resistance zones
+
+Support and resistance are shared analytical features and must be available in the Pattern Explorer.
+
+## 9.1 Input and clustering
+
+- Use swing points with `k=3`.
+- Examine the last 250 completed bars.
+- Each swing point carries its own ATR(14) measured at the pivot.
+- Sort swing points deterministically by price, timestamp and pivot type.
+- Add a point to the current cluster when its distance from the current cluster mean is <= `0.5 × ATR_at_that_point`.
+- Recalculate the mean after each addition.
+
+This avoids making cluster output dependent on an arbitrary input order.
+
+## 9.2 Zone definition
+
+- Zone bounds are the minimum and maximum prices in the cluster.
+- Pad the zone by `0.1 × median_cluster_ATR` on either side.
+- Require at least two touches.
+- Touches must be at least five bars apart.
+- Merge zones that overlap or are less than `0.25 × median_cluster_ATR` apart.
+- Recompute merged bounds and touch counts.
+
+## 9.3 Zone lifecycle
+
+Support broken:
+
+- Two consecutive completed closes below the lower zone boundary minus the `0.1 × ATR` break buffer.
+
+Resistance broken:
+
+- Two consecutive completed closes above the upper zone boundary plus the break buffer.
+
+After a confirmed break, flip the zone's role:
+
+- Broken resistance becomes potential support.
+- Broken support becomes potential resistance.
+
+Retest definition:
+
+- A retest must happen after a confirmed break.
+- The candle range must intersect the zone.
+- For broken resistance becoming support, the candle must close on the reclaimed side of the zone midpoint and must not close beyond the opposite zone boundary by the break buffer.
+- Mirror this for broken support becoming resistance.
+- A retest is not confirmed by an intrabar touch alone.
+
+## 9.4 Display
+
+Report:
+
+- Touch count
+- Zone width
+- Last touch time
+- Distance from latest close as percentage
+- Distance from latest close in ATR
+- Current role
+- Broken/retested status
+
+Display only the nearest four zones above and four below the current close.
+
+---
+
+# 10. Pattern lifecycle and status state machine
+
+Evaluate statuses on all completed bars.
+
+Pattern boundaries at the current bar are calculated by extending the fitted geometry.
+
+## 10.1 Geometry freeze after breakout
+
+At the first confirmed `Broke Above` or `Broke Below`:
+
+- Freeze the pattern's fitted geometry.
+- Never refit the broken pattern.
+- Continue tracking the frozen pattern for 20 completed bars.
+- Archive it after 20 bars.
+- Preserve the breakout and subsequent lifecycle events in history.
+
+This prevents a broken formation from silently disappearing because the breakout bars distort a new fit.
+
+## 10.2 Status definitions
+
+| Status | Rule |
+|---|---|
+| Developing | A preliminary candidate passes all structural gates except it has exactly one fewer touch than the required minimum. Hidden by default. |
+| Forming | A provisional reversal pivot is not yet confirmed, or a valid pole has a preliminary 3–4 bar flag/pennant consolidation. |
+| Validated | All structural detection gates pass; latest close is inside relevant boundaries and not near a boundary. |
+| Near Upper Boundary | Close is inside and `upper(now) − close <= 0.15 × W(now)`. |
+| Near Lower Boundary | Close is inside and `close − lower(now) <= 0.15 × W(now)`. |
+| Broke Above | Two consecutive completed closes above the relevant upper boundary or neckline by at least `0.1 × ATR`. |
+| Broke Below | Two consecutive completed closes below the relevant lower boundary or neckline by at least `0.1 × ATR`. |
+| Invalidated | One of the explicit invalidation conditions below has occurred. |
+
+For reversals:
+
+- Double Top / H&S: Near Lower Boundary when the close is within 1 ATR above the neckline.
+- Double Bottom / Inverse H&S: Near Upper Boundary when the close is within 1 ATR below the neckline.
+
+For reversals, the neckline is the relevant breakout boundary.
+
+## 10.3 Break direction by pattern
+
+All non-reversal patterns use upper and lower boundaries.
+
+- Break above: two consecutive closes above the upper boundary plus buffer.
+- Break below: two consecutive closes below the lower boundary minus buffer.
+
+Reversal patterns use neckline only:
+
+- Double Top / H&S: Broke Below neckline.
+- Double Bottom / Inverse H&S: Broke Above neckline.
+
+## 10.4 Invalidation conditions
+
+Use explicit reason codes:
+
+`failed_breakout`
+
+- After a confirmed breakout, three consecutive completed closes return inside the original frozen pattern boundaries.
+- For reversals, use the original neckline as the boundary.
+- The invalidation is terminal.
+
+`extreme_exceeded`
+
+- Double Top: close above the higher of P1/P2 plus `0.5 × ATR` before neckline breakout.
+- H&S: close above head plus `0.5 × ATR` before neckline breakout.
+- Double Bottom and Inverse H&S: mirror the rule using the pattern's lowest extreme.
+
+`apex_passed`
+
+- Applies to converging patterns.
+- If no breakout has occurred and the latest completed bar reaches or passes `apex_index − 3`, invalidate the formation.
+- Record the reason.
+- If the computed apex is already behind the latest fitted bar, reject the candidate as a current live formation.
+
+`Invalidated` is terminal for that detection ID. Do not silently reactivate it. A genuinely new formation must receive a new detection ID.
+
+## 10.5 Status precedence
+
+When more than one state could apply, use:
+
+1. Invalidated
+2. Broke Above / Broke Below
+3. Near Upper / Near Lower — if near both, select the smaller normalized boundary distance
+4. Validated
+5. Forming
+6. Developing
+
+Preserve lifecycle transitions as timestamped events.
+
+---
+
+# 11. Pattern quality score
+
+Quality is a geometric fit score, not a probability of success, breakout likelihood or expected return.
+
+Score:
+
+`100 × sum(weight × component_score)`
+
+Each component must be clamped to the range 0–1 before aggregation:
+
+```python
+component = max(0.0, min(1.0, raw_component))
+```
+
+Use deterministic formulas and display the component breakdown in Pattern Explorer.
+
+The weights below are initial placeholders, not validated predictive weights.
+
+## 11.1 Parallel family
+
+| Component | Weight |
+|---|---:|
+| Parallelism | 25 |
+| Touches | 20 |
+| Containment | 20 |
+| Boundary fit | 20 |
+| Trend fit / flatness | 15 |
+
+Components:
+
+- Parallelism: `1 − parallelism_error / 0.25`
+- Touches: `min(total_touches / 8, 1)`
+- Containment: `(containment − 0.88) / 0.12`
+- Boundary fit: `1 − mean_touch_residual / (0.15 × W_mean)`
+- For rising/falling channels, trend fit: `(R² − 0.50) / (0.90 − 0.50)`
+- For horizontal channel/rectangle, flatness: `1 − abs(M) / (0.60 × W_mean)`
+
+Clamp every component to 0–1.
+
+## 11.2 Converging family
+
+| Component | Weight |
+|---|---:|
+| Convergence | 20 |
+| Touches | 25 |
+| Containment | 20 |
+| Boundary fit | 20 |
+| Touch spread | 15 |
+
+Components:
+
+- Convergence: `(0.60 − CR) / (0.60 − 0.15)`
+- Touches: `min(total_touches / 8, 1)`
+- Containment: `(containment − 0.85) / 0.15`
+- Boundary fit: `1 − mean_touch_residual / touch_tolerance`
+- Touch spread: `(spread / L − 0.40) / 0.60`
+
+Clamp all components.
+
+## 11.3 Flags and pennants
+
+| Component | Weight |
+|---|---:|
+| Pole strength | 30 |
+| Retracement | 25 |
+| Tightness | 20 |
+| Boundary fit | 15 |
+| Volume contraction | 10 |
+
+Components:
+
+- Pole strength: `min((H / ATR) / 6, 1)`
+- Retracement: `1 − retracement / permitted_retracement`
+- Tightness: `1 − W0 / (0.5 × H)`
+- Boundary fit: based on normalized mean touch residual.
+- Volume contraction:
+  - Score 1 when consolidation average volume <= 0.7 × pole average volume.
+  - Decline linearly to 0 at 1.0 × pole average volume.
+  - Score 0 above 1.0 × pole average volume.
+
+Volume contraction is a quality factor only. It must not be a mandatory pattern gate.
+
+## 11.4 Double Top and Double Bottom
+
+| Component | Weight |
+|---|---:|
+| Similarity | 30 |
+| Depth | 25 |
+| Separation | 15 |
+| Prior trend | 15 |
+| Volume | 15 |
+
+Components:
+
+- Similarity: `1 − abs(P1 − P2) / allowed_peak_difference`, where allowed difference is the smaller of `0.25 × D` and `0.03 × average_peak_price`.
+- Depth: `min((D / ATR) / 6, 1)`
+- Separation:
+  - 0 at 10 bars.
+  - Linear ramp to 1 at 15 bars.
+  - 1 between 15 and 40 bars.
+  - Linear decline to 0 at 60 bars.
+- Prior trend: `min(prior_trend_move / (2 × D), 1)`
+- Volume: score 1 when P2 volume <= 0.5 × P1 volume; linear to 0 when P2 volume >= P1 volume.
+
+Mirror for Double Bottom.
+
+Volume is a soft quality factor, never a validity requirement.
+
+## 11.5 Head & Shoulders and Inverse H&S
+
+| Component | Weight |
+|---|---:|
+| Shoulder similarity | 25 |
+| Time symmetry | 20 |
+| Head prominence | 20 |
+| Neckline flatness | 15 |
+| Size | 20 |
+
+Components:
+
+- Shoulder similarity: `1 − abs(LS − RS) / allowed_shoulder_difference`, where allowed difference is the smaller of `0.3 × HH` and `0.05 × average_shoulder_price`.
+- Time symmetry: `1 − abs(ln(ratio)) / ln(2)`
+- Head prominence: `((prominence / HH) − 0.20) / 0.20`
+- Neckline flatness: `1 − abs(T1 − T2) / (0.5 × HH)`
+- Size: `min((HH / ATR) / 6, 1)`
+
+Mirror for Inverse H&S.
+
+## 11.6 UI labels
+
+| Score | Label |
+|---|---|
+| 85–100 | Excellent |
+| 70–84 | Strong |
+| 50–69 | Moderate |
+| Below 50 | Weak |
+
+These are presentation categories only. Do not describe them as probability bands or validated outcome categories.
+
+---
+
+# 12. Pattern chart geometry contract
+
+This is a core requirement.
+
+When a user clicks any stock or pattern in Pattern Scanner, open Pattern Explorer with an interactive candlestick chart and the detected pattern drawn over the candles.
+
+The backend must return structured drawing metadata. The frontend must not independently rediscover or refit patterns.
+
+## 12.1 Geometry output
+
+Support typed drawing metadata for:
+
+- Upper and lower lines.
+- Horizontal boundaries.
+- Shaded formation regions.
+- Support and resistance zones.
+- Swing-high and swing-low markers.
+- Necklines.
+- Flagpoles.
+- Breakout and breakdown markers.
+- Pattern-specific points such as LS, head, RS, P1, P2 and trough.
+- Apex points and projected line intersections.
+
+Every point must reference the same candle timestamp and price basis used by the detector.
+
+Use a structured, versioned schema rather than passing loosely structured arbitrary JSON.
+
+## 12.2 Chart contents
+
+Display:
+
+- Candlesticks.
+- Volume histogram in a separate pane.
+- Pattern boundaries and geometry.
+- Shaded pattern region.
+- Swing markers.
+- Support/resistance zones.
+- Breakout/breakdown markers.
+- Relevant neckline, pole or reversal points.
+- Pattern metric panel.
+- Pattern lifecycle and quality breakdown.
+
+## 12.3 Chart interactions
+
+Support:
+
+- Zoom.
+- Pan.
+- Crosshair.
+- Inspect candle date, OHLC and volume.
+- Switch timeframe.
+- Show/hide pattern overlay.
+- Show/hide swing points.
+- Show/hide support/resistance.
+- Show/hide volume.
+- Reset zoom.
+- Go to latest completed candle.
+- Select between multiple detections.
+- List all patterns detected for the selected stock/timeframe.
+- Render the selected detection prominently.
+
+When timeframe changes, retrieve candles and detections for the new timeframe. Never reuse 1D coordinates over a 1H chart.
+
+## 12.4 Lightweight Charts v5 requirements
+
+Use Lightweight Charts v5 APIs only.
+
+Use:
+
+- `createChart`
+- `CandlestickSeries`
+- `LineSeries`
+- `HistogramSeries`
+
+Use v5 series creation:
+
+`chart.addSeries(CandlestickSeries, options)`
+
+For volume, use:
+
+`chart.addSeries(HistogramSeries, options, paneIndex)`
+
+Use:
+
+`createSeriesMarkers(series, markers)`
+
+Do not use the removed v4-style `series.setMarkers()` API.
+
+For shaded bands, zones and polygons, create one reusable `ISeriesPrimitive` rendering layer. Do not create a separate custom drawing implementation for every pattern.
+
+Use consistent Asia/Kolkata time display. Confirm that the values supplied to Lightweight Charts and the formatter represent the same instants. Do not accidentally double-convert timestamps or display browser-local dates.
+
+Dispose chart instances, subscriptions, markers and primitives correctly when the component unmounts or the selected symbol changes.
+
+Handle chart resize reliably.
+
+---
+
+# 13. Dashboard and user interface
+
+Use a dark theme.
+
+## 13.1 Colour palette
+
+| Element | Colour |
+|---|---|
+| Page background | `#052232` |
+| Panels | `#073446` |
+| Border | `#19C3DA` at 25% opacity |
+| Main text | `#E6EDF0` |
+| Muted text | `#8B9BA5` |
+| Broke Above | `#95EB45` |
+| Near Upper / Near Lower | `#19C3DA` |
+| Broke Below | `#F2643C` |
+
+Developing, Forming and Validated must have distinct, visually distinguishable colours. Use separate muted blue, amber and green/teal tones. Do not display all three as the same grey.
+
+Invalidated should use muted grey.
+
+Use consistent colours across the table, badges, chart and lifecycle history.
+
+## 13.2 Dashboard header
+
+Include:
+
+- App title: Indian Price Action Screener.
+- NSE India indicator.
+- Universe selector: NIFTY 500, F&O, Non-F&O, All.
+- Timeframe selector.
+- As-of date selector.
+- Refresh button.
+- Scan progress indicator.
+- Last scan timestamp.
+
+## 13.3 Filters
+
+Support:
+
+- Pattern
+- Pattern category
+- Timeframe
+- Lifecycle status
+- F&O membership
+- Minimum quality score
+- Symbol/company search
+
+## 13.4 Results table
+
+Columns:
+
+- Symbol
+- Company
+- F&O status
+- Pattern
+- Timeframe
+- Lifecycle status
+- Pattern quality
+- Formation length
+- Upper touches
+- Lower touches
+- Width
+- Volume ratio
+- Latest close
+- Latest candle time
+
+Features:
+
+- Sortable columns.
+- Pagination or virtual scrolling.
+- Search by symbol/company.
+- Filter combinations.
+- Click any row to open Pattern Explorer.
+
+## 13.5 Market overview
+
+Display:
+
+- Total detected patterns.
+- Pattern distribution.
+- Timeframe distribution.
+- F&O/non-F&O split.
+- Lifecycle status counts.
+- Last successful scan.
+- Data refresh status.
+
+## 13.6 Pattern Explorer layout
+
+Header:
+
+- Symbol.
+- Company name.
+- F&O membership.
+- Pattern type.
+- Timeframe.
+- Lifecycle status.
+- Quality score.
+
+Main area:
+
+- Candlestick chart with pattern geometry.
+- Volume pane.
+
+Side panel:
+
+- Pattern metrics.
+- Formation start/end.
+- Formation length.
+- Touch counts.
+- Width and movement.
+- ATR values.
+- Containment.
+- Quality component breakdown.
+- Lifecycle status and event history.
+
+Below the chart:
+
+- Swing-point details.
+- Detection explanation.
+- Boundary coordinates.
+- Related patterns.
+- S/R zone details.
+
+Do not use labels such as Buy, Sell, Target, Entry Signal or Trade Recommendation. This application identifies chart structures; it does not issue trading instructions.
+
+Add an educational disclaimer:
+
+"Market data may be delayed, incomplete or adjusted by the provider. Pattern detections are rule-based chart analyses, not investment advice. Verify the underlying data and make independent decisions."
+
+---
+
+# 14. Backend API
+
+India is the only supported market. Do not add a redundant `market=india` parameter.
+
+Implement the following endpoints.
+
+## 14.1 Health
+
+`GET /api/health`
+
+Return:
+
+- Application status.
+- Database status.
+- Market data provider status.
+- NIFTY 500 last refresh.
+- F&O last refresh.
+- Last scan.
+- Scheduler status.
+- Active scan status.
+
+## 14.2 Scan
+
+`GET /api/scan`
+
+Parameters:
+
+- `universe=nifty500|fno|non_fno|all`
+- `timeframe=1h|4h|1d|1w`
+- `pattern`
+- `category`
+- `status`
+- `min_quality`
+- `asof=YYYY-MM-DD`
+
+Return:
+
+- Scan ID.
+- Scan timestamp.
+- Configuration version.
+- Progress/state where applicable.
+- Total scanned.
+- Successful symbols.
+- Failed symbols.
+- Detection counts.
+- Matches sorted by quality.
+
+Each match must contain, where applicable:
+
+- Pattern ID.
+- Symbol.
+- Company name.
+- F&O membership: yes/no/unknown.
+- Pattern type.
+- Category.
+- Timeframe.
+- Lifecycle status.
+- Quality score.
+- Formation start/end.
+- Formation length.
+- Upper/lower touch counts.
+- Width.
+- Drop/rise.
+- Volume ratio.
+- Last close.
+- Last candle time.
+- Pattern metrics.
+- Configuration version.
+
+## 14.3 Chart
+
+`GET /api/chart`
+
+Parameters:
+
+- `symbol`
+- `timeframe`
+- `pattern_id`
+- `asof`
+
+Return:
+
+- Candles.
+- Matching detections.
+- Drawing metadata.
+- Swing points.
+- S/R zones.
+- Quality score and breakdown.
+- Pattern lifecycle history.
+- Relevant detection explanation.
+
+Where available, return at least:
+
+`max(pattern_length + 60, 160)` candles.
+
+Do not return future candles in as-of mode.
+
+## 14.4 Manual refresh
+
+`POST /api/scan/refresh`
+
+Accept:
+
+- Universe.
+- Timeframe.
+- Pattern/category filters.
+- As-of date when applicable.
+
+Start a background scan and return a scan ID.
+
+## 14.5 History
+
+`GET /api/history`
+
+Support filters for:
+
+- Symbol.
+- Pattern.
+- Timeframe.
+- Date range.
+- F&O status.
+- Lifecycle status.
+
+Use Pydantic validation. Return clear validation errors. Log backend exception details but never expose stack traces through API responses.
+
+## 14.6 Scan execution
+
+- Avoid overlapping identical universe/timeframe/as-of scans.
+- Assign scan IDs.
+- Record progress.
+- Preserve partial results.
+- Make scan status queryable.
+- Do not lose completed results when a different scan starts.
+
+---
+
+# 15. Database and persistence
+
+Use SQLite as the application's database.
+
+Use SQLAlchemy Core only.
+
+Create tables or equivalent well-structured records for:
+
+- Stocks.
+- F&O membership snapshots/history.
+- Market data metadata.
+- Scans.
+- Scan progress.
+- Pattern detections.
+- Pattern geometry.
+- Lifecycle events.
+- Support/resistance zones.
+- Download errors.
+- Configuration versions.
+
+OHLCV may be stored as local files or a dedicated cache to avoid bloating SQLite. Keep a reliable mapping between metadata and local candle storage.
+
+Persist the latest successful scan results.
+
+After an application restart, restore the last available scan results instead of starting with an empty dashboard.
+
+Use database migrations or a clearly documented schema-version mechanism. Do not destructively recreate the user's database during normal startup.
+
+---
+
+# 16. Scheduler
+
+Use APScheduler v3.
+
+Initial schedules:
+
+- 1H: every 30 minutes.
+- 4H: every 2 hours.
+- 1D: every 6 hours.
+- 1W: daily.
+
+Rules:
+
+- Intraday scans may run only during the NSE session and up to 15 minutes after its close.
+- Skip intraday scans overnight and on NSE holidays.
+- Daily scans should run after the daily candle has completed.
+- Weekly scans should run after the final trading session of the week has completed.
+- Use an NSE holiday calendar or a reliable holiday source.
+- Prevent duplicate scheduler jobs.
+- Allow manual refresh.
+- Avoid running unnecessary scans while the application is idle.
+
+Initial startup scan order:
+
+1. 1D
+2. 1W
+3. 4H
+4. 1H
+
+Record scan start/end time and result counts.
+
+---
+
+# 17. Historical tracking and outcome analytics — P3
+
+Pattern detection and historical outcome measurement must remain separate concepts.
+
+Track:
+
+- First detection.
+- Last detection.
+- Quality changes.
+- Boundary changes.
+- Lifecycle transitions.
+- Breakout/breakdown timestamp.
+- Invalidation timestamp and reason.
+- Subsequent price movement.
+- Pattern disappearance or archive event.
+
+Do not use future information in the detection process.
+
+Historical outcome analysis may use post-detection candles, but those candles must never be used to retroactively improve the original detection.
+
+Do not publish predictive success rates until there are enough human-labelled observations and a defined evaluation methodology.
+
+Provide explicit labels for:
+
+- Detection timestamp.
+- Formation window.
+- Breakout timestamp.
+- Measurement horizon.
+- Subsequent return or price movement.
+- Maximum favourable/adverse movement, if implemented.
+
+Avoid presenting a small-sample result as a reliable trading statistic.
+
+---
+
+# 18. Human chart labelling and detector evaluation — P3
+
+This feature is essential for improving the numerical rules.
+
+The coding agent must not claim that it visually validated the detector. It must build tools that allow the user to label examples and measure detector performance.
+
+## 18.1 Chart labelling tool
+
+Allow the user to open a historical chart and manually label:
+
+- Symbol.
+- Timeframe.
+- Pattern type.
+- Formation start.
+- Formation end.
+- Upper/lower boundaries.
+- Relevant swing points.
+- Valid pattern.
+- Invalid pattern.
+- Near miss.
+- False detection.
+- Notes.
+
+Allow users to save, edit and export labels.
+
+Do not infer ground truth from the detector's own output.
+
+## 18.2 Dataset export
+
+Export:
+
+- Labelled examples.
+- Detector results.
+- False positives.
+- False negatives.
+- Configuration version.
+- Detection timestamp.
+- Formation timestamps.
+- Relevant metrics.
+
+Use CSV and JSON where useful.
+
+## 18.3 Precision and recall evaluation
+
+Calculate:
+
+`Precision = True Positives / (True Positives + False Positives)`
+
+`Recall = True Positives / (True Positives + False Negatives)`
+
+Evaluate separately by:
+
+- Pattern.
+- Timeframe.
+- Universe segment where relevant.
+- Configuration version.
+
+Avoid relying only on an aggregate score across all 17 patterns.
+
+Provide a clear method for matching a detector result to a human-labelled example. Document the matching criteria, including pattern type and formation-window overlap.
+
+## 18.4 Initial evaluation targets
+
+These are proposed engineering targets, not claims about current accuracy.
+
+| Metric | Initial target |
+|---|---:|
+| Precision | >= 80% |
+| Recall | >= 60% |
+| Duplicate detections | As close to zero as possible |
+
+Prioritise precision initially because a large number of false detections makes the screener difficult to use.
+
+Show cases where precision is high but recall is low. Do not hide missed patterns.
+
+## 18.5 Train/validation separation
+
+Do not tune and evaluate on the same labelled examples.
+
+Reserve a separate validation set, preferably using different stocks and later time periods.
+
+Keep the validation set untouched while tuning.
+
+When there is enough data, report results on both the tuning set and the held-out validation set.
+
+Do not claim that thresholds are optimal merely because they perform well on the examples used to tune them.
+
+---
+
+# 19. Threshold tuning and configuration governance
+
+This is a core design requirement.
+
+Never change a detection threshold based on intuition alone.
+
+Every threshold change must be:
+
+1. Configurable.
+2. Versioned.
+3. Documented.
+4. Evaluated against a labelled dataset.
+5. Compared against the previous configuration.
+
+For every threshold change, report:
+
+- Previous value.
+- New value.
+- Reason for change.
+- Affected pattern(s).
+- Affected timeframe(s).
+- Before/after precision.
+- Before/after recall.
+- False positives added or removed.
+- False negatives added or removed.
+- Validation-set results.
+
+Provide a parameter sweep facility for selected thresholds.
+
+For example, triangle convergence ratio can be evaluated at:
+
+- 0.50
+- 0.55
+- 0.60
+- 0.65
+- 0.70
+
+These are candidate test values, not a requirement to select one in advance.
+
+The evaluation report must show how the choice affects precision and recall. It must not select a value solely because it produces the greatest number of detections.
+
+Keep detection thresholds, lifecycle thresholds and quality-score weights logically separate. They serve different purposes and must be tuned independently.
+
+Do not automatically deploy a changed configuration merely because one metric improved. Present the comparison and keep configuration changes explicit and reversible.
+
+---
+
+# 20. Testing and validation
+
+## 20.1 Self-test first
+
+Implement:
+
+`python -m app.selftest`
+
+Run it before testing the complete application.
+
+Print actual test results. Do not report success without executing the tests.
+
+## 20.2 Synthetic detector tests
+
+For all 17 detectors, include:
+
+- Positive synthetic example.
+- Negative example.
+- Near-miss example.
+- Invalidated example.
+
+Synthetic tests prove that code follows the intended formulas. They do not prove that the rules identify real-world chart patterns accurately.
+
+## 20.3 Falling Channel regression tests
+
+Include:
+
+- Clean falling channel is detected.
+- Last two completed closes above the upper boundary result in Broke Above.
+- Converging wedge is rejected as a Falling Channel.
+- Flat range is rejected.
+- Rising channel is rejected.
+- Arch-shaped up-then-down structure is rejected.
+
+## 20.4 Shared engine tests
+
+Test:
+
+- No future leakage.
+- Incomplete candle exclusion.
+- As-of correctness.
+- Asia/Kolkata timestamp correctness.
+- NSE 4H session resampling.
+- Weekly completion across holidays.
+- Duplicate/missing candles.
+- F&O historical unknown state.
+- Universe filters.
+- Detection deduplication.
+- Geometry coordinates.
+- Break-buffer calculations.
+- Touch calculation and overshoot handling.
+- Configuration version persistence.
+- Quality component clamping.
+
+## 20.5 Backend tests
+
+Test:
+
+- API schemas.
+- Invalid query parameters.
+- Scan locking.
+- Partial download success.
+- Database persistence.
+- Application restart recovery.
+- Historical scan reproducibility.
+- Lifecycle transitions.
+- Pattern geometry serialization.
+
+## 20.6 Frontend tests
+
+Verify:
+
+- Frontend production build.
+- Dashboard loading.
+- Pattern filters.
+- Chart candle rendering.
+- Volume pane.
+- Pattern overlays.
+- Marker rendering using `createSeriesMarkers`.
+- Timeframe switching.
+- Chart resize.
+- Multiple detection selection.
+- Chart cleanup after component unmount.
+
+## 20.7 Real-chart validation
+
+Do not claim real-chart accuracy without human labels.
+
+Build the chart-labelling and evaluation tools in P3. Provide instructions for the user to label and validate actual NSE charts.
+
+---
+
+# 21. Development execution and acceptance criteria
+
+## P1 — Core Screener
+
+Implement:
+
+- Project foundation.
+- Configuration system and versioning.
+- SQLite schema.
+- NIFTY 500 ingestion.
+- F&O membership ingestion and snapshots.
+- Market data provider abstraction.
+- Data caching and incremental refresh.
+- 1H, 4H, 1D and 1W completed-candle handling.
+- Shared detection engine.
+- Patterns 1–9:
+  - Falling Channel
+  - Rising Channel
+  - Horizontal Channel
+  - Rectangle
+  - Ascending Triangle
+  - Descending Triangle
+  - Symmetrical Triangle
+  - Falling Wedge
+  - Rising Wedge
+- Lifecycle framework.
+- Pattern geometry contract.
+- Dashboard.
+- Pattern Explorer with candlestick and volume charts.
+- Synthetic tests for all P1 patterns.
+- README and setup instructions.
+
+P1 must be a working application, not a set of disconnected modules.
+
+### P1 acceptance
+
+- Backend starts on port 8031.
+- Frontend starts on port 5191.
+- Health endpoint returns meaningful status.
+- Universe data loads or clearly reports why it cannot.
+- At least one scan can execute using available data.
+- Scan results persist.
+- Clicking a pattern opens the correct chart.
+- Pattern geometry aligns with candle timestamps and prices.
+- Tests and frontend build complete successfully.
+
+If external market data is unavailable during implementation, use deterministic test fixtures to verify the application. Clearly distinguish fixture results from live market results.
+
+## P2 — Advanced Patterns
+
+Implement:
+
+- Bullish Flag.
+- Bearish Flag.
+- Bullish Pennant.
+- Bearish Pennant.
+- Double Top.
+- Double Bottom.
+- Head & Shoulders.
+- Inverse Head & Shoulders.
+- Support/resistance zones.
+- Full lifecycle handling for all 17 patterns.
+- Pattern precedence and deduplication.
+- Geometry rendering for all additional patterns.
+- Synthetic tests for all eight additional patterns.
+- Integrated tests across all 17 patterns.
+
+P2 completes the first-release pattern catalogue.
+
+### P2 acceptance
+
+- All 17 patterns can be selected and filtered.
+- Each detector follows its configured numerical rules.
+- Every detected pattern has backend-generated chart geometry.
+- All applicable lifecycle states work.
+- Pattern quality breakdown is available.
+- No pattern is represented as a Buy/Sell recommendation.
+- The complete application passes regression tests.
+
+## P3 — History and Evaluation
+
+Implement:
+
+- Pattern detection history.
+- Lifecycle event history.
+- Geometry snapshots.
+- Breakout/breakdown tracking.
+- Historical outcome analytics.
+- Chart-labelling tool.
+- Label export.
+- Detector-result export.
+- Precision/recall evaluation.
+- Configuration comparison.
+- Parameter sweep support.
+- Validation-set separation.
+- Documentation of the tuning workflow.
+
+### P3 acceptance
+
+A user can:
+
+1. Open a historical stock chart.
+2. Label a pattern manually.
+3. Save and export the label.
+4. Compare the detector's result against the label.
+5. Calculate precision and recall by pattern and timeframe.
+6. Compare two configurations.
+7. Identify whether a threshold change improved or degraded validation performance.
+
+---
+
+# 22. README and documentation
+
+The README must provide:
+
+- Project overview.
+- Architecture.
+- Technology stack.
+- Folder structure.
+- Windows setup instructions.
+- Python virtual environment creation.
+- Backend dependency installation.
+- Frontend dependency installation.
+- Database initialization.
+- Universe refresh.
+- Market data refresh.
+- How to start backend.
+- How to start frontend.
+- How to run tests.
+- How to run self-test.
+- How to trigger a manual scan.
+- How to access Pattern Explorer.
+- How to change detection configuration.
+- How to interpret lifecycle statuses.
+- How to interpret Pattern Quality.
+- Known data-provider limitations.
+- Known limitations of the initial thresholds.
+- How to continue P2 and P3.
+- Troubleshooting.
+
+Document the exact market data provider and its limitations. Do not imply that Yahoo Finance data is guaranteed complete or exchange-authoritative.
+
+---
+
+# 23. Final report required from the coding agent
+
+When the selected phase is complete, provide a factual implementation report containing:
+
+1. What was implemented.
+2. Files/modules created or modified.
+3. Features completed.
+4. Features not completed.
+5. Backend startup result.
+6. Frontend startup/build result.
+7. Actual self-test output.
+8. Actual test summary: passed, failed and skipped.
+9. API verification results.
+10. Chart verification results.
+11. Market data provider status.
+12. Universe and F&O data status.
+13. Known limitations.
+14. Exact commands to run the application.
+15. Exact commands to run the tests.
+16. Recommended next phase.
+
+Paste the actual self-test output or a meaningful test summary. Do not merely say "all tests passed".
+
+Do not claim that:
+
+- Live NSE data is working unless verified.
+- All 17 patterns are implemented unless P2 is completed.
+- Real-world chart accuracy is validated without a human-labelled evaluation.
+- A threshold is optimal without held-out validation results.
+- A chart feature works without verifying it.
+
+If something cannot be completed because of unavailable network access, provider restrictions or environment limitations, explain the actual blocker and complete the remaining work.
+
+---
+
+# 24. Final engineering principle
+
+Build this as a practical, reliable and explainable NSE pattern screener—not as a black-box signal generator.
+
+The numerical values in this specification are initial defaults. Their purpose is to give the first implementation deterministic behaviour and a consistent baseline.
+
+The long-term quality of the application must come from:
+
+- Correct data handling.
+- No look-ahead bias.
+- Deterministic geometry.
+- Explainable detections.
+- Reliable lifecycle tracking.
+- Human-labelled chart examples.
+- Separate tuning and validation datasets.
+- Measured precision and recall.
+- Versioned and reversible configuration changes.
+
+**Never change a pattern detection threshold based on intuition alone. Every threshold change must be configurable, versioned and evaluated against a labelled dataset. Report before-and-after precision and recall for the affected pattern and timeframe. Do not claim that a threshold is optimal unless it has been tested on a separate validation dataset.**
+
+Start implementation with P1 now. Make reasonable engineering decisions without asking unnecessary questions, document assumptions, and deliver a working application.

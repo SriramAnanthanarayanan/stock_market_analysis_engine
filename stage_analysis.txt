@@ -1,0 +1,203 @@
+Stage Analysis Screener — Logic Specification
+Objective: Automate my existing manual Stage Analysis process using weekly stock charts, 30-week EMA, weekly base formation and my TradingView Relative Strength indicator.
+
+The goal is to identify stocks in Stage 1 accumulation and potential Early Stage 2 transitions, before they become significantly extended.
+1. Data requirements
+- Universe: NSE stocks (Nifty 500 universe).
+- Primary timeframe: Weekly.
+- Benchmark: Nifty 50 (^NSEI).
+- Historical data: Prefer 3 years of weekly OHLCV data.
+- Use completed weekly candles only.
+- Use aligned dates between stock and benchmark.
+2. Weekly base formation
+Identify stocks forming a Stage 1 consolidation after a meaningful correction.
+
+Parameters:
+Metric	Criteria
+Base lookback	52 weeks
+Maximum base range	30%
+Price proximity to base high	Within 5%
+Base high	Highest weekly high
+Base low	Lowest weekly low
+
+Formula:
+\[
+BaseRange\% = \frac{BaseHigh-BaseLow}{BaseLow}\times100
+\]
+
+Identify:
+- Base high and low.
+- Base resistance and support.
+- Base range percentage.
+- Base duration.
+- Current price distance from resistance.
+- Whether the stock is forming higher lows.
+The base should represent consolidation after a meaningful prior decline, not simply any 52-week sideways movement.
+3. 30-week EMA
+This is one of my primary Stage Analysis indicators.
+
+Calculate:
+ema30 = weekly_close.ewm(span=30, adjust=False).mean()
+
+
+
+Identify:
+Condition	Classification
+Price below 30W EMA	Below trend
+Price within ±5% of EMA	Testing / transition
+Price above 30W EMA	Above trend
+
+Also calculate EMA direction:
+- Compare current EMA with EMA four weeks ago.
+- Rising EMA: positive trend.
+- Falling EMA: negative trend.
+- Approximately flat: consolidation.
+For Early Stage 2, preference is price above a rising 30-week EMA.
+4. Relative Strength indicator — replicate TradingView Pine Script
+This is a key indicator I regularly use for manual analysis.
+
+Do not replace its calculation with ordinary stock return minus index return.
+
+RS configuration:
+Parameter	Weekly	Daily
+Benchmark	Nifty 50	Nifty 50
+RS lookback	52 bars	63 bars
+RS trend lookback (base)	5	5
+RS moving average	50 bars	50 bars
+Price confirmation SMA	50 bars	50 bars
+
+The Stage Analysis screener must use the weekly configuration.
+
+A. Relative Strength calculation
+
+Replicate this exact formula:
+rs = (    (stock_close / stock_close.shift(52)) /    (nifty_close / nifty_close.shift(52))) - 1
+
+
+
+Interpretation:
+- RS above zero: Stock outperforming Nifty.
+- RS below zero: Stock underperforming Nifty.
+- RS crossing above zero: Relative performance turning positive.
+B. RS trend
+
+Replicate:
+y0 = res - res[base]
+angle0 = math.atan(y0 / base)
+
+
+With base = 5.
+
+Interpretation:
+- Positive: RS improving over five weeks.
+- Negative: RS deteriorating over five weeks.
+C. RS moving average
+rs_sma50 = rs.rolling(50).mean()
+
+
+
+Classify:
+- Rising RS SMA: Positive.
+- Falling RS SMA: Negative.
+- Otherwise: Neutral.
+Replicate the Pine Script rising/falling checks over three bars.
+
+D. Price confirmation bubbles
+
+Replicate the following:
+sma_symb = ta.sma(close, 50)
+
+pos_div = ta.rising(sma_symb, 3) and close >= sma_symb
+
+neg_div = ta.falling(sma_symb, 3) and close < sma_symb
+
+
+Output:
+- Bullish price confirmation.
+- Bearish price confirmation.
+- Neutral.
+Note: This is price-trend confirmation, not actual bullish/bearish divergence.
+5. Volume analysis
+Volume is supporting evidence for base formation and transition.
+
+Compare:
+Metric	Period
+Previous average volume	26 weeks before recent base
+Base average volume	Recent 26 weeks
+Recent volume	Last 4 weeks
+
+Conditions:
+1. Volume contraction: Recent 26-week average volume should be lower than the preceding 26-week average.
+2. Volume expansion: Last 4-week average volume should be at least 1.5× the recent 26-week average.
+Interpretation:
+- Volume contraction indicates supply drying up.
+- Volume expansion indicates increasing demand.
+Keep these as separate measurable signals.
+6. Stage classification
+Classify every stock into one of these categories.
+Stage	Classification logic
+Stage 1 — Watchlist	Consolidation base, price testing 30W EMA, improving RS preferred
+Early Stage 2 — Candidate	Price above rising 30W EMA, positive and improving RS, approaching base resistance
+Stage 2 — Confirmed	Weekly close breaks above previous base resistance, supported by volume and positive RS
+Other / Unqualified	Does not meet the above conditions
+
+Important: Do not reject Stage 1 candidates simply because RS is still negative. Improving RS can be an early indication of relative strength returning.
+7. Additional metrics to calculate
+For every stock, calculate and store:
+Category	Metrics
+Price	Current close, weekly high, weekly low
+Base	Base high, base low, range %, duration
+EMA	30W EMA, distance %, direction
+RS	RS value, zero-line status, 5-week direction
+RS SMA	50-week SMA, direction
+Price confirmation	Bullish / Bearish / Neutral
+Volume	26-week contraction ratio, 4-week expansion ratio
+Breakout	Base resistance, distance to breakout
+Classification	Stage 1 / Early Stage 2 / Stage 2
+
+8. Ranking stocks
+Rank qualifying stocks using:
+1. Stage classification.
+2. Higher RS value.
+3. Stronger five-week RS improvement.
+4. Rising RS 50-week SMA.
+5. Rising 30-week EMA.
+6. Lower base range.
+7. Stronger volume expansion.
+Do not make every supporting indicator a mandatory filter. Preserve the distinction between screening candidates and confirming actual breakouts.
+9. Output requirements
+Create a dedicated Stage Analysis watchlist with:
+- Symbol
+- Company name
+- Current price
+- Stage classification
+- 30W EMA
+- EMA direction
+- Base range %
+- Base resistance
+- Distance to breakout %
+- RS 52W
+- RS direction
+- RS 50 SMA direction
+- Price confirmation
+- Volume contraction
+- Volume expansion
+- Final ranking
+Also provide a summary count:
+- Stage 1 candidates.
+- Early Stage 2 candidates.
+- Confirmed Stage 2 stocks.
+- Rejected / unqualified stocks.
+10. Critical implementation requirements
+1. Python RS calculations must match TradingView's indicator formula.
+2. Use 52 bars for weekly RS and 63 bars for daily RS.
+3. Use Nifty 50 as the benchmark.
+4. Never mix daily and weekly calculations.
+5. Use completed weekly candles only.
+6. Do not include the current breakout candle when calculating previous base resistance.
+7. Handle missing data and benchmark date alignment.
+8. Maintain sufficient historical data for the 50-week RS moving average.
+9. Show individual filter results, including reasons why a stock failed.
+10. Keep the Stage Analysis logic independent of other daily price-action screening strategies.
+
+Expected outcome: An automated version of my manual TradingView workflow. I should be able to run the screener, receive a list of Stage 1 and Early Stage 2 candidates, and open the charts only for visual verification and final trade decisions.

@@ -1,0 +1,29 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime data (rebuilt automatically)
+backend/.cache/
+backend/cache/
+backend/data/screener.db
+backend/data/screener.db-*
+backend/data/backups/
+backend/data/*.tmp
+*.csv.tmp
+
+# Logs from start.ps1 / servers
+logs/
+*.log
+
+# Local secrets / editor state
+.env
+.env.*
+.vscode/
+.idea/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+ui-screenshots/
