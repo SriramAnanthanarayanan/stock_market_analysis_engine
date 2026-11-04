@@ -7,6 +7,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Evaluation } from "./pages/Evaluation";
 import { Explorer } from "./pages/Explorer";
 import { FreshBreakoutScanner } from "./pages/FreshBreakoutScanner";
+import { VcpScanner } from "./pages/VcpScanner";
 import { VolumeShocker } from "./pages/VolumeShocker";
 import { Week52Scanner } from "./pages/Week52Scanner";
 import { History } from "./pages/History";
@@ -22,6 +23,7 @@ const NAV: { to: string; label: string; testid: string; end?: boolean; group?: s
   { to: "/fresh-breakouts", label: "Fresh Breakouts", testid: "nav-fresh-breakouts" },
   { to: "/52-week", label: "52-Week Breakouts", testid: "nav-52week" },
   { to: "/volume-shocker", label: "Volume Shocker", testid: "nav-volume" },
+  { to: "/vcp", label: "VCP Scanner", testid: "nav-vcp" },
   { to: "/breakouts", label: "Breakout Scanner", testid: "nav-breakouts" },
   { to: "/indicators", label: "Indicator Scanner", testid: "nav-indicators" },
   { to: "/rrg", label: "RRG", testid: "nav-rrg", group: "Markets" },
@@ -69,6 +71,7 @@ export default function App() {
             <Route path="/fresh-breakouts" element={<FreshBreakoutScanner />} />
             <Route path="/52-week" element={<Week52Scanner />} />
             <Route path="/volume-shocker" element={<VolumeShocker />} />
+            <Route path="/vcp" element={<VcpScanner />} />
             <Route path="/indicators" element={<IndicatorScanner />} />
             <Route path="/rrg" element={<RRG />} />
             <Route path="/stage" element={<StageAnalysis />} />

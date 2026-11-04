@@ -485,7 +485,7 @@ class ScanManager:
             from .vcp.detector import detect_vcp
         except ImportError:  # pragma: no cover - P2 module
             return
-        res = detect_vcp(frame, self.s.vcp_cfg, symbol=st.symbol, atr=ser["atr"])
+        res = detect_vcp(frame, self.s.vcp_cfg, symbol=st.symbol, atr=ser["atr"], config_hash=config_hash(self.s.vcp_cfg))
         if res is None:
             return
         self._persist_vcp(scan_id, st, res)

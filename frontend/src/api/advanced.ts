@@ -209,3 +209,106 @@ export const advApi = {
   evidence: (q: Q) => request<AdvResult<Evidence>>(`/api/evidence${qs(q)}`),
   config: (which: "signals" | "vcp" | "confluence") => request<{ version: string; config_hash: string; parameters: ConfigParamRow[]; detector_timeframes?: Record<string, string[]> }>(`/api/config/${which}`),
 };
+
+// ---------------------------------------------------------------- VCP (P2)
+export type VcpStatus = "developing" | "forming" | "tightening" | "near_pivot" | "breakout" | "breakout_pending" | "pivot_cross_low_volume" | "failed_breakout" | "invalidated";
+
+export interface VcpContraction {
+  seq: number;
+  label: string;
+  start_time: string;
+  end_time: string;
+  start_price: number;
+  end_price: number;
+  depth: number;
+  depth_pct: number;
+  bars: number;
+  avg_volume: number | null;
+  min_volume: number | null;
+  volume_vs_avg50: number | null;
+  provisional: boolean;
+}
+
+export interface VcpGeometry {
+  schema_version: string;
+  vcp_id: string;
+  base: { i_start: number; t_start: number; i_end: number; t_end: number; p_high: number; p_low: number };
+  contractions: { seq: number; label: string; t_high: number; p_high: number; t_low: number; p_low: number; depth_pct: number; volume_vs_avg50: number | null; provisional: boolean }[];
+  pivot: { i: number; t: number; p: number; t_end: number };
+  breakout: { i: number; t: number; time: string; close: number; volume_ratio: number | null; volume_ok: boolean } | null;
+  event: { i: number; t: number; status: string } | null;
+  last_candle: { i: number; t: number; p: number };
+}
+
+export interface StageContext {
+  stage: string;
+  stage_label: string;
+  stage_since: string | null;
+  rs: number | null;
+  ema30_direction: string | null;
+  week: string | null;
+}
+
+export interface QualityComp {
+  name: string;
+  weight: number;
+  raw: number | null;
+  score: number;
+  formula: string;
+}
+
+export interface VcpGate {
+  name: string;
+  passed: boolean | null;
+  value: unknown;
+  rule: string;
+  basis: string;
+}
+
+export interface VcpRow extends StockRef {
+  vcp_id: string;
+  status: VcpStatus;
+  status_label: string;
+  status_reason: string | null;
+  qualified: boolean;
+  quality: number;
+  quality_components: QualityComp[];
+  gates: VcpGate[];
+  explanation: string[];
+  contractions: number;
+  depths_pct: number[];
+  base_start: string;
+  base_end: string;
+  base_sessions: number;
+  pivot: number | null;
+  pivot_time: string | null;
+  final_depth_pct: number | null;
+  last_close: number | null;
+  pivot_distance_pct: number | null;
+  breakout_time: string | null;
+  last_candle_time: string | null;
+  metrics: Record<string, unknown> & { volume_trend_final_vs_first?: number | null; final_volume_vs_avg50?: number | null; dry_up_days_final?: number | null; prior_advance_pct?: number | null; contraction_volumes?: (number | null)[] };
+  stage?: StageContext | null;
+  trend_context_ok?: boolean | null;
+  geometry?: VcpGeometry;
+  contraction_list?: VcpContraction[];
+  config_version: string;
+}
+
+export interface VcpScanResult extends AdvResult<VcpRow> {
+  stage_scan: { scan_id: string; finished_at: string | null } | null;
+  status_labels: Record<string, string>;
+}
+
+export interface VcpSymbol {
+  symbol: string;
+  source: "scan" | "adhoc";
+  vcp: VcpRow | null;
+  stage: StageContext | null;
+  note?: string;
+}
+
+export const vcpApi = {
+  scan: (q: Q) => request<VcpScanResult>(`/api/scan/vcp${qs(q)}`),
+  symbol: (symbol: string, asof?: string | null) => request<VcpSymbol>(`/api/vcp/symbol${qs({ symbol, asof })}`),
+};

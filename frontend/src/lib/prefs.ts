@@ -28,6 +28,7 @@ export interface ChartPrefs {
   showDrawings: boolean;
   showRsLine: boolean;
   showStage: boolean;
+  showVcp: boolean; // VCP geometry from the latest daily scan (daily charts)
   logScale: boolean; // logarithmic price axis (long histories)
 }
 
@@ -59,6 +60,7 @@ export const DEFAULT_PREFS: ChartPrefs = {
   showDrawings: true,
   showRsLine: false,
   showStage: false,
+  showVcp: false,
   logScale: false,
 };
 

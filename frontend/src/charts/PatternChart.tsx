@@ -54,6 +54,15 @@ export interface OverlayLine {
   dashed?: boolean;
 }
 
+/** Extra candle marker supplied by a page (e.g. a breakout candle, a VCP breakout). */
+export interface ChartMarker {
+  t: number;
+  position: "above" | "below" | "inBar";
+  shape: "arrowUp" | "arrowDown" | "circle" | "square";
+  color: string;
+  text?: string;
+}
+
 export interface ChartHandle {
   screenshot: () => HTMLCanvasElement | null;
   paneStretch: () => number[];
@@ -68,6 +77,8 @@ export interface PatternChartProps {
   showZones: boolean;
   /** Extra shapes drawn on top (e.g. the label being edited). */
   extraShapes?: OverlayShape[];
+  /** Extra candle markers (e.g. a scanner event of the row that opened the chart). */
+  extraMarkers?: ChartMarker[];
   /** Called when a candle is clicked: its start time and the clicked price. */
   onCandleClick?: (info: { t: number; price: number }) => void;
   timeframe: Timeframe;
@@ -604,6 +615,11 @@ export function PatternChart(props: PatternChartProps) {
       chartDebug.divergenceSegments = 0;
       chartDebug.dailyLevels = 0;
     }
+    for (const m of props.extraMarkers ?? []) {
+      if (!byTimeRef.current.has(m.t)) continue;
+      markers.push({ time: ts(m.t), position: m.position === "above" ? "aboveBar" : m.position === "below" ? "belowBar" : "inBar", shape: m.shape, color: m.color, text: m.text, size: 1 } as SeriesMarker<Time>);
+      techRoles.extra_marker = (techRoles.extra_marker ?? 0) + 1;
+    }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     markersRef.current.setMarkers(markers);
     if (extraShapes?.length) shapes.push(...extraShapes);
@@ -616,7 +632,8 @@ export function PatternChart(props: PatternChartProps) {
     chartDebug.overlayShapes = shapes.length;
     chartDebug.detectionId = detection?.pattern_id ?? null;
     reapplyView();
-  }, [detection, showOverlay, showSwings, swings, candles, zones, showZones, extraShapes, tech, prefs.showMarubozu, prefs.showBreakouts, prefs.showDailyLevels, prefs.showDivergence, timeframe, indicators, prefs.showRsi]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detection, showOverlay, showSwings, swings, candles, zones, showZones, extraShapes, props.extraMarkers, tech, prefs.showMarubozu, prefs.showBreakouts, prefs.showDailyLevels, prefs.showDivergence, timeframe, indicators, prefs.showRsi]);
 
   // ---- manual drawings (separate primitive; never touches detector geometry)
   const drawings = props.drawings ?? [];

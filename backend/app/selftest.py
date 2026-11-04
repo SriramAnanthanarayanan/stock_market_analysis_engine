@@ -422,6 +422,63 @@ def technical_checks(r: Runner, cal: NSECalendar) -> None:
     r.check("e1", "unconfirmed pivot -> developing only", d_dev)
 
 
+def advanced_checks(r: Runner, cal: NSECalendar) -> None:
+    """Fresh 10-day breakouts, Volume Shocker, 52-week, VCP (synthetic; proves the rules, not accuracy)."""
+    print("\n== Advanced scanners: fresh breakouts, Volume Shocker, 52-week, VCP")
+    from .config import DEFAULT_SIGNAL_CONFIG as S, DEFAULT_VCP_CONFIG as V
+    from .signals.breakouts import crossing_events, fresh_kind, fresh_params, w52_kind, w52_params, week52_state
+    from .signals.volume import volume_shocks
+    from .synthetic_e1 import closes_frame
+    from .synthetic_vcp import VCPSpec, vcp_frame
+    from .vcp import detect_vcp
+
+    def fresh(closes):
+        f = closes_frame(closes, cal, wick=1.0)
+        a = atr_wilder(f["high"].to_numpy(), f["low"].to_numpy(), f["close"].to_numpy(), 14)
+        ev, _ = crossing_events(f, a, fresh_params(S), symbol="S", kind_of=lambda d: fresh_kind(d, 10), config_hash="h", since=0, volume_lookback=20, first_lookback=20)
+        return [e for e in ev if e["direction"] == "bullish"]
+
+    def fb_pos():
+        ev = fresh([100.0] * 40 + [103.0, 104.0, 105.0])
+        return [e["index"] for e in ev] == [40], f"events at {[e['index'] for e in ev]} (one event, no daily repeats)"
+
+    def fb_rearm():
+        ev = fresh([100.0] * 40 + [103.0, 100.5, 100.2, 100.4] + [100.0] * 12 + [104.0])
+        return len(ev) == 2 and ev[0]["episode_state"] == "reset", f"{len(ev)} events, first episode {ev[0]['episode_state'] if ev else '-'}"
+
+    def vs_2x():
+        c = np.full(80, 100.0)
+        f = closes_frame(c, cal, wick=1.0, v=np.r_[np.full(79, 1e5), 2e5])
+        a = atr_wilder(f["high"].to_numpy(), f["low"].to_numpy(), f["close"].to_numpy(), 14)
+        sh = volume_shocks(f, "1d", a, None, None, S, since=79)
+        return len(sh) == 1 and abs(sh[0]["rvol"] - 2.0) < 1e-9, f"RVOL {sh[0]['rvol'] if sh else None}"
+
+    def w52_insufficient():
+        f = closes_frame(np.linspace(100, 130, 200), cal, wick=1.0)
+        a = atr_wilder(f["high"].to_numpy(), f["low"].to_numpy(), f["close"].to_numpy(), 14)
+        ev, walks = crossing_events(f, a, w52_params(S), symbol="S", kind_of=w52_kind, config_hash="h", since=0, volume_lookback=20, first_lookback=20)
+        st = week52_state(f, a, S, walks)
+        return st["status"] == "insufficient_history" and not ev, f"{st['status']}, {len(ev)} events with 199 previous sessions"
+
+    def vcp(spec, want):
+        def run():
+            r = detect_vcp(vcp_frame(spec, cal), V, symbol="S")
+            got = r["status"] if r else None
+            return got in want, f"status {got}, depths {r['depths_pct'] if r else '-'}, quality {r['quality'] if r else '-'}"
+        return run
+
+    r.check("adv", "fresh 10-day breakout: one event per episode", fb_pos)
+    r.check("adv", "fresh breakout re-armed after 3 closes inside", fb_rearm)
+    r.check("adv", "volume shock: 2x the previous 20 candles", vs_2x)
+    r.check("adv", "52-week: < 252 sessions -> insufficient history", w52_insufficient)
+    r.check("adv", "VCP: 3 contractions near the pivot", vcp(VCPSpec(), {"near_pivot", "tightening"}))
+    r.check("adv", "VCP: non-contracting base rejected", vcp(VCPSpec(depths=(15, 15, 14)), {None, "invalidated"}))
+    r.check("adv", "VCP: rising volume not qualified", vcp(VCPSpec(volumes=(0.5e5, 0.7e5, 1.0e5)), {"forming"}))
+    r.check("adv", "VCP: breakout with volume expansion", vcp(VCPSpec(tail=[(1.02, 2.5e5)]), {"breakout"}))
+    r.check("adv", "VCP: pivot cross without volume", vcp(VCPSpec(tail=[(1.02, 0.6e5)]), {"pivot_cross_low_volume"}))
+    r.check("adv", "VCP: failed breakout", vcp(VCPSpec(tail=[(1.02, 2.5e5), (0.97, 0.6e5), (0.965, 0.6e5)]), {"failed_breakout"}))
+
+
 def main() -> int:
     t0 = time.time()
     cal = NSECalendar.load(HOLIDAYS)
@@ -440,6 +497,7 @@ def main() -> int:
     p2_pattern_checks(r, cal)
     falling_channel_regressions(r, cal)
     technical_checks(r, cal)
+    advanced_checks(r, cal)
     passed = sum(1 for x in r.results if x[2])
     failed = [x for x in r.results if not x[2]]
     print(f"\nSummary: {passed} passed, {len(failed)} failed, {len(r.results)} total in {time.time() - t0:.1f}s")

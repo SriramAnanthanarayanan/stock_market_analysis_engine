@@ -159,6 +159,9 @@ export function ChartTerminalBar(p: Props) {
         <button className={chip(prefs.showBreakouts)} onClick={() => set({ showBreakouts: !prefs.showBreakouts })} title={p.dailyOnlyNote ? "Breakout markers are drawn on the daily chart" : "10-day breakout / breakdown markers"} data-testid="toggle-breakouts">
           Breakouts
         </button>
+        <button className={chip(prefs.showVcp)} onClick={() => set({ showVcp: !prefs.showVcp })} title={p.dailyOnlyNote ? "VCP is detected on daily candles: switch to 1D to see it" : "Volatility Contraction Pattern of the latest daily scan: base, T1/T2/... contractions, pivot, breakout"} data-testid="toggle-vcp">
+          VCP (1D)
+        </button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <div className="flex gap-1" role="group" aria-label="Drawing tools">

@@ -45,6 +45,7 @@ def create_app(settings: Settings | None = None, provider: MarketDataProvider | 
     from .api.indices import router as indices_router
     from .api.stage import router as stage_router
     from .api.signals import router as signals_router
+    from .api.vcp import router as vcp_router
     from .api.routes import router
     from .services import Services
 
@@ -72,6 +73,7 @@ def create_app(settings: Settings | None = None, provider: MarketDataProvider | 
     app.include_router(indices_router)
     app.include_router(stage_router)
     app.include_router(signals_router)
+    app.include_router(vcp_router)
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:

@@ -9,6 +9,7 @@ import { useChartTerminal } from "../charts/useChartTerminal";
 import { ChartTerminalBar } from "../components/ChartTerminalBar";
 import { DataSourcePanel, TechnicalPanel } from "../components/TechnicalPanel";
 import { StagePanel } from "../components/StagePanel";
+import { VcpPanel } from "../components/VcpPanel";
 import { ErrorNote, FnoBadge, KV, Panel, QualityCell, StatusBadge } from "../components/common";
 import { fmtBarTime, fmtNum, fmtPct, humanize } from "../lib/format";
 import { CATEGORY_LABELS, TIMEFRAMES } from "../lib/status";
@@ -223,7 +224,10 @@ export function Explorer() {
     [data],
   );
   const term = useChartTerminal("stock", termSrc, params.get("show"));
-  const chartShapes = useMemo(() => (labelOpen ? [...labelPreview, ...term.stageOverlay.shapes] : term.stageOverlay.shapes), [labelOpen, labelPreview, term.stageOverlay]);
+  const chartShapes = useMemo(
+    () => [...(labelOpen ? labelPreview : []), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes],
+    [labelOpen, labelPreview, term.stageOverlay, term.vcpOverlay],
+  );
 
   const setTf = (tf: Timeframe) => {
     const next = new URLSearchParams(params);
@@ -376,6 +380,7 @@ export function Explorer() {
               zones={data.sr_zones ?? []}
               showZones={toggles.sr}
               extraShapes={chartShapes}
+              extraMarkers={term.vcpOverlay.markers}
               onCandleClick={labelOpen ? (c) => setLastClick({ ...c, n: Date.now() }) : undefined}
               resetKey={resetKey}
               latestKey={latestKey}
@@ -437,6 +442,8 @@ export function Explorer() {
           {det && <MetricsPanel d={det} />}
           {det && <QualityPanel d={det} />}
           {det && <LifecyclePanel d={det} />}
+          {term.vcp?.vcp && term.prefs.showVcp && <VcpPanel v={term.vcp.vcp} stage={term.vcp.stage} />}
+          {term.prefs.showVcp && term.vcp && !term.vcp.vcp && <div className="panel px-3 py-2 text-[11px] text-muted" data-testid="vcp-none">VCP: {term.vcp.note ?? "no VCP candidate"}</div>}
           <StagePanel stage={term.stage} rs={term.rsLine} />
           <TechnicalPanel tech={term.tech} ind={term.indicators} timeframe={timeframe} error={term.techError} />
           <DataSourcePanel ds={data?.data_source} />

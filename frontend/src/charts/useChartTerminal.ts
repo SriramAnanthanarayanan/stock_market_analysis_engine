@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Candle, IndicatorPayload, RSLinePayload, StageDetail, TechnicalPayload, Timeframe } from "../api/types";
 import type { OverlayShape } from "./OverlayPrimitive";
+import { vcpApi, type VcpSymbol } from "../api/advanced";
+import { vcpMarkers, vcpShapes } from "./vcpOverlay";
 import {
   drawingKey,
   exportAllDrawings,
@@ -50,6 +52,7 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
         showDivergence: p.showDivergence || s.has("divergence"),
         showRsLine: p.showRsLine || s.has("rs"),
         showStage: p.showStage || s.has("stage"),
+        showVcp: p.showVcp || s.has("vcp"),
         emas: s.has("ema") ? p.emas.map((e) => ({ ...e, visible: e.visible || [20, 50, 200].includes(e.period) })) : p.emas,
       };
       savePrefs(next);
@@ -158,6 +161,28 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     return { lines: [{ id: "30W EMA", color: "#E3A33B", times: ov.times, values: ov.ema30, width: 2 }], shapes };
   }, [stage, prefs.showStage, src?.timeframe]);
 
+  // ---- VCP geometry of the latest daily scan (daily charts only; never re-detected here)
+  const [vcp, setVcp] = useState<VcpSymbol | null>(null);
+  useEffect(() => {
+    if (!src || instrument !== "stock" || !prefs.showVcp || src.timeframe !== "1d") {
+      setVcp(null);
+      return;
+    }
+    let cancelled = false;
+    vcpApi
+      .symbol(src.symbol, src.asof)
+      .then((r) => !cancelled && setVcp(r))
+      .catch(() => !cancelled && setVcp(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [src?.symbol, src?.timeframe, src?.asof, instrument, prefs.showVcp]);
+  const vcpOverlay = useMemo(() => {
+    const g = vcp?.vcp?.geometry;
+    if (!g || !prefs.showVcp) return { shapes: [] as OverlayShape[], markers: [] };
+    return { shapes: vcpShapes(g, vcp?.vcp?.last_close), markers: vcpMarkers(g) };
+  }, [vcp, prefs.showVcp]);
+
   const handle = useRef<ChartHandle | null>(null);
   const onReady = useCallback((h: ChartHandle | null) => {
     handle.current = h;
@@ -228,6 +253,8 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     techError,
     rsLine,
     stage,
+    vcp,
+    vcpOverlay,
     extraPanes,
     stageOverlay,
     onReady,
