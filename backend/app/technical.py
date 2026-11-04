@@ -113,6 +113,7 @@ class TechResult:
     snapshot: dict[str, Any]
     signals: list[dict[str, Any]] = field(default_factory=list)
     divergences: list[Divergence] = field(default_factory=list)
+    series: dict[str, Any] | None = None  # EMA / RSI / ATR arrays the result was computed from (reused by later scanners)
 
 
 def divergence_record(d: Divergence, times: pd.DatetimeIndex, n: int) -> dict[str, Any]:
@@ -197,12 +198,12 @@ def nearest_sr(frame: pd.DataFrame, f: int, direction: str, timeframe: str, dcfg
     return {"low": _f(z.low), "high": _f(z.high), "role": z.role, "touches": len(z.touches), "status_before": z.status}
 
 
-def analyze(frame: pd.DataFrame, timeframe: str, tcfg: TechnicalConfig, dcfg: DetectionConfig = DEFAULT_CONFIG, with_sr: bool = True) -> TechResult:
+def analyze(frame: pd.DataFrame, timeframe: str, tcfg: TechnicalConfig, dcfg: DetectionConfig = DEFAULT_CONFIG, with_sr: bool = True, cache_key: tuple | None = None) -> TechResult:
     n = len(frame)
     times = frame.index
     if n == 0:
         return TechResult("insufficient_history", {"bars": 0})
-    ser = indicator_series(frame, tcfg)
+    ser = indicator_series(frame, tcfg, cache_key=cache_key)
     c = frame["close"].to_numpy(dtype=float)
     last = n - 1
     emas = {p: _f(v[last]) for p, v in ser["ema"].items()}
@@ -260,7 +261,7 @@ def analyze(frame: pd.DataFrame, timeframe: str, tcfg: TechnicalConfig, dcfg: De
         snapshot["daily_reference"] = refs
     snapshot["crosses_recent"] = [{"kind": x["kind"], "direction": x["direction"], "age_bars": x["age_bars"]} for x in crosses]
     status = "ok" if not align.missing else "insufficient_history"
-    return TechResult(status, snapshot, signals, divs)
+    return TechResult(status, snapshot, signals, divs, ser)
 
 
 def tech_hash(tcfg: TechnicalConfig) -> str:

@@ -103,6 +103,10 @@ class ScanManager:
                         tech_config_hash=config_hash(self.s.tech_cfg),
                         stage_config_version=self.s.stage_cfg.version if req.timeframe == "1w" else None,
                         stage_config_hash=config_hash(self.s.stage_cfg) if req.timeframe == "1w" else None,
+                        signal_config_version=self.s.signal_cfg.version,
+                        signal_config_hash=config_hash(self.s.signal_cfg),
+                        vcp_config_version=self.s.vcp_cfg.version if req.timeframe == "1d" else None,
+                        vcp_config_hash=config_hash(self.s.vcp_cfg) if req.timeframe == "1d" else None,
                         trigger=req.trigger,
                         state="queued",
                         phase="queued",
@@ -217,6 +221,14 @@ class ScanManager:
             except Exception as exc:
                 stage_note = f"Stage Analysis benchmark {s.stage_cfg.benchmark} unavailable: {exc}"
                 log.warning("scan %s: %s", scan_id, stage_note)
+        # Advanced: weekly scans also place each stock on the RRG-style rotation vs the
+        # RRG benchmark (existing rrg.rrg_series, same weekly candles) for confluence evidence.
+        rrg_bench = None
+        if req.timeframe == "1w":
+            try:
+                rrg_bench = s.indices.frame(s.index_cfg.rrg_default_benchmark, "1w", cutoff)["close"]
+            except Exception as exc:
+                log.warning("scan %s: RRG benchmark %s unavailable: %s", scan_id, s.index_cfg.rrg_default_benchmark, exc)
         processed = ok = failed = n_det = 0
         for st in stocks:
             status, err, bars, last_ts, note = "ok", None, 0, None, None
@@ -239,13 +251,20 @@ class ScanManager:
                     self._store_detections(scan_id, st, dets)
                     if bars:
                         self._store_zones(scan_id, st.symbol, req.timeframe, ctx)
+                        stage_res = None
                         if req.timeframe == "1w":
-                            self._store_stage(scan_id, st, ps.frame, stage_bench, stage_note)
+                            stage_res = self._store_stage(scan_id, st, ps.frame, stage_bench, stage_note)
+                        tech = None
                         try:
-                            self._store_technical(scan_id, st, req.timeframe, ps.frame)
+                            tech = self._store_technical(scan_id, st, req.timeframe, ps.frame)
                         except Exception as texc:  # technical analytics never fail the pattern scan
                             log.exception("scan %s: technical analysis for %s failed", scan_id, st.symbol)
                             note = ((note + "; ") if note else "") + f"technical analysis failed: {type(texc).__name__}: {texc}"[:300]
+                        try:
+                            self._store_signals(scan_id, st, req.timeframe, ps.frame, dets, tech, stage_res, rrg_bench)
+                        except Exception as sexc:  # advanced scanners never fail the pattern scan
+                            log.exception("scan %s: signal evidence for %s failed", scan_id, st.symbol)
+                            note = ((note + "; ") if note else "") + f"signal scanners failed: {type(sexc).__name__}: {sexc}"[:300]
                     n_det += len(dets)
             except Exception as exc:
                 log.exception("scan %s: symbol %s failed", scan_id, st.symbol)
@@ -319,13 +338,14 @@ class ScanManager:
                     config_hash=config_hash(cfg),
                 )
             )
+        return res
 
     def _store_technical(self, scan_id: str, st: StockInfo, timeframe: str, frame) -> None:
         """E1: indicator snapshot + candlestick / EMA-cross / RSI-divergence / breakout signals."""
         from .technical import analyze
 
         tcfg = self.s.tech_cfg
-        res = analyze(frame, timeframe, tcfg, self.s.cfg)
+        res = analyze(frame, timeframe, tcfg, self.s.cfg, cache_key=("stock", st.symbol, timeframe, self.s.store.price_basis))
         th = config_hash(tcfg)
         snap = res.snapshot
         with self.s.engine.begin() as conn:
@@ -368,6 +388,170 @@ class ScanManager:
             ]
             if rows:
                 conn.execute(db.tech_signals.insert(), rows)
+        return res
+
+    def _store_signals(self, scan_id: str, st: StockInfo, timeframe: str, frame, dets: list[Detection], tech, stage_res, rrg_bench) -> int:
+        """Advanced scanners (fresh breakouts, 52-week, Volume Shocker, VCP) and the
+        normalized evidence of every scanner of this scan (docs/confluence-engine.md).
+        Existing results (patterns, Marubozu, EMA alignment, Stage, RS) are re-labelled,
+        never re-detected."""
+        from .signals.evidence import Publisher
+        from .signals.scan import run_signals
+        from .technical import indicator_series
+
+        s = self.s
+        n = len(frame)
+        if n == 0:
+            return 0
+        times = frame.index
+        cal = s.calendar
+
+        def valid_until(i: int, k: int) -> str | None:
+            j = i + k
+            if j < n:
+                return iso(times[j])
+            proj = cal.project_bar_starts(times[-1], timeframe, j - (n - 1))
+            return iso(proj[-1]) if proj else None
+
+        pub = Publisher(st.symbol, timeframe, n, valid_until, s.confluence_cfg.freshness_sessions)
+        ser = tech.series if tech is not None and tech.series else indicator_series(frame, s.tech_cfg, cache_key=("stock", st.symbol, timeframe, s.store.price_basis))
+        scfg = s.signal_cfg
+        sv, sh = scfg.version, config_hash(scfg)
+        outs = run_signals(frame, timeframe, ser["atr"], ser["ema"].get(20), ser["ema"].get(50), scfg, st.symbol)
+        if timeframe == "1d":
+            pub.fresh_breakouts(outs.fresh_events, outs.fresh_touches, sv, sh)
+            pub.week52(outs.w52_events, outs.w52_touches, outs.w52_state, sv, sh)
+            self._store_vcp(scan_id, st, frame, ser, pub)
+        pub.volume_shocks(outs.shocks, sv, sh)
+        if tech is not None:
+            tv, th = s.tech_cfg.version, config_hash(s.tech_cfg)
+            pub.marubozu(tech.signals, tv, th)
+            pub.divergences(tech.signals, tv, th)
+            pub.ema_alignment(tech.snapshot, tech.status, tv, th)
+        pub.patterns(dets, times, s.cfg.version, config_hash(s.cfg))
+        if stage_res is not None:
+            pub.stage(stage_res, s.stage_cfg.version, config_hash(s.stage_cfg))
+        if rrg_bench is not None:
+            from .rrg import rrg_entry
+
+            entry = rrg_entry(st.symbol, frame["close"], rrg_bench, s.index_cfg, s.index_cfg.rrg_trail_weeks)
+            pub.rrg(entry, s.index_cfg.rrg_default_benchmark, s.index_cfg.version, config_hash(s.index_cfg))
+        created = db.now_ist_iso()
+        seen: set[str] = set()
+        rows = []
+        for ev in pub.rows:
+            if ev["evidence_id"] in seen:
+                continue
+            seen.add(ev["evidence_id"])
+            rows.append(
+                {
+                    "scan_id": scan_id,
+                    "evidence_id": ev["evidence_id"],
+                    "symbol": st.symbol,
+                    "company": st.company,
+                    "fno_status": st.fno_status,
+                    "in_nifty500": int(st.in_nifty500),
+                    "timeframe": timeframe,
+                    "source": ev["source"],
+                    "signal_type": ev["signal_type"],
+                    "category": ev["category"],
+                    "kind": ev["kind"],
+                    "direction": ev["direction"],
+                    "signal_time": ev["signal_time"],
+                    "signal_t": ev["signal_t"],
+                    "age_bars": ev["age_bars"],
+                    "status": ev["status"],
+                    "lifecycle": ev["lifecycle"],
+                    "valid_until": ev["valid_until"],
+                    "expiry_rule": ev["expiry_rule"],
+                    "quality": ev["quality"],
+                    "strength": ev["strength"],
+                    "underlying_id": ev["underlying_id"],
+                    "metrics_json": db.dumps(ev["metrics"]),
+                    "explanation_json": db.dumps(ev["explanation"]),
+                    "config_version": ev["config_version"],
+                    "config_hash": ev["config_hash"],
+                    "created_at": created,
+                }
+            )
+        if rows:
+            with s.engine.begin() as conn:
+                conn.execute(db.signal_evidence.insert(), rows)
+        return len(rows)
+
+    def _store_vcp(self, scan_id: str, st: StockInfo, frame, ser, pub) -> None:
+        """VCP detection (daily scans); implemented in app.vcp (P2)."""
+        try:
+            from .vcp.detector import detect_vcp
+        except ImportError:  # pragma: no cover - P2 module
+            return
+        res = detect_vcp(frame, self.s.vcp_cfg, symbol=st.symbol, atr=ser["atr"])
+        if res is None:
+            return
+        self._persist_vcp(scan_id, st, res)
+        from .config import config_hash as _h
+
+        pub.vcp(res, self.s.vcp_cfg.version, _h(self.s.vcp_cfg))
+
+    def _persist_vcp(self, scan_id: str, st: StockInfo, v: dict) -> None:
+        created = db.now_ist_iso()
+        with self.s.engine.begin() as conn:
+            conn.execute(
+                db.vcp_formations.insert().values(
+                    scan_id=scan_id,
+                    vcp_id=v["vcp_id"],
+                    symbol=st.symbol,
+                    company=st.company,
+                    fno_status=st.fno_status,
+                    in_nifty500=int(st.in_nifty500),
+                    timeframe="1d",
+                    status=v["status"],
+                    status_reason=v.get("status_reason"),
+                    qualified=int(bool(v.get("qualified"))),
+                    quality=float(v.get("quality") or 0.0),
+                    contractions=int(v.get("contractions") or 0),
+                    base_start=v["base_start"],
+                    base_end=v["base_end"],
+                    base_sessions=int(v["base_sessions"]),
+                    pivot=v.get("pivot"),
+                    pivot_time=v.get("pivot_time"),
+                    final_depth_pct=v.get("final_depth_pct"),
+                    depths_json=db.dumps(v.get("depths_pct")),
+                    last_close=v.get("last_close"),
+                    pivot_distance_pct=v.get("pivot_distance_pct"),
+                    breakout_time=v.get("breakout_time"),
+                    last_candle_time=v.get("last_candle_time"),
+                    metrics_json=db.dumps(v.get("metrics", {})),
+                    quality_json=db.dumps(v.get("quality_components", [])),
+                    gates_json=db.dumps(v.get("gates", [])),
+                    explanation_json=db.dumps(v.get("explanation", [])),
+                    geometry_json=db.dumps(v.get("geometry", {})),
+                    config_version=self.s.vcp_cfg.version,
+                    config_hash=config_hash(self.s.vcp_cfg),
+                    created_at=created,
+                )
+            )
+            rows = [
+                {
+                    "scan_id": scan_id,
+                    "vcp_id": v["vcp_id"],
+                    "seq": k + 1,
+                    "start_time": c["start_time"],
+                    "end_time": c["end_time"],
+                    "start_price": c["start_price"],
+                    "end_price": c["end_price"],
+                    "depth": c["depth"],
+                    "depth_pct": c["depth_pct"],
+                    "bars": c["bars"],
+                    "avg_volume": c.get("avg_volume"),
+                    "min_volume": c.get("min_volume"),
+                    "volume_vs_avg50": c.get("volume_vs_avg50"),
+                    "provisional": int(bool(c.get("provisional"))),
+                }
+                for k, c in enumerate(v.get("contraction_list", []))
+            ]
+            if rows:
+                conn.execute(db.vcp_contractions.insert(), rows)
 
     def _store_zones(self, scan_id: str, symbol: str, timeframe: str, ctx: SeriesContext) -> None:
         """Persist the nearest S/R zones above and below the latest close."""

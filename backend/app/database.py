@@ -157,6 +157,10 @@ scans = Table(
     Column("tech_config_hash", String),
     Column("stage_config_version", String),  # E3: StageConfig (weekly scans)
     Column("stage_config_hash", String),
+    Column("signal_config_version", String),  # fresh breakouts / volume shocker / 52-week (migration 8)
+    Column("signal_config_hash", String),
+    Column("vcp_config_version", String),  # VCP detector (daily scans, migration 8)
+    Column("vcp_config_hash", String),
 )
 Index("ix_scans_lookup", scans.c.timeframe, scans.c.universe, scans.c.asof, scans.c.state)
 
@@ -496,6 +500,222 @@ Index("ix_stage_results_stage", stage_results.c.scan_id, stage_results.c.stage)
 
 E3_TABLES = [stage_results]
 
+# ------------------------------------------------------------------ Advanced: evidence, VCP, confluence, drawings
+# Normalized signal evidence: every scanner publishes what it found through this
+# one shape (docs/confluence-engine.md). Detail lives in metrics_json; typed
+# columns are the ones filtered on. Rows belong to a scan and are never rewritten.
+signal_evidence = Table(
+    "signal_evidence",
+    metadata,
+    Column("scan_id", String, nullable=False),
+    Column("evidence_id", String, nullable=False),
+    Column("symbol", String, nullable=False),
+    Column("company", String),
+    Column("fno_status", String),
+    Column("in_nifty500", Integer),
+    Column("timeframe", String, nullable=False),
+    Column("source", String, nullable=False),  # fresh_breakout | week52 | volume_shock | vcp | marubozu | pattern | ema_alignment | stage | rs_line | rrg | rsi_divergence
+    Column("signal_type", String, nullable=False),
+    Column("category", String, nullable=False),  # trend | setup | trigger | volume_candle | relative_strength | context
+    Column("kind", String, nullable=False),  # event | state | formation
+    Column("direction", String, nullable=False),  # bullish | bearish | neutral
+    Column("signal_time", String),  # reference candle start (IST)
+    Column("signal_t", Integer),
+    Column("age_bars", Integer),
+    Column("status", String, nullable=False),
+    Column("lifecycle", String, nullable=False),  # active | invalidated | expired (at the scan)
+    Column("valid_until", String),
+    Column("expiry_rule", String),
+    Column("quality", Float),
+    Column("strength", Float),  # the source's primary measure (RVOL, ATR distance, quality ...)
+    Column("underlying_id", String),  # event_id / detection_id / vcp_id / track_id
+    Column("metrics_json", Text, nullable=False),
+    Column("explanation_json", Text),
+    Column("config_version", String, nullable=False),
+    Column("config_hash", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    PrimaryKeyConstraint("scan_id", "evidence_id"),
+)
+Index("ix_evidence_scan_source", signal_evidence.c.scan_id, signal_evidence.c.source)
+Index("ix_evidence_symbol", signal_evidence.c.symbol, signal_evidence.c.timeframe)
+Index("ix_evidence_underlying", signal_evidence.c.underlying_id)
+
+vcp_formations = Table(
+    "vcp_formations",
+    metadata,
+    Column("scan_id", String, nullable=False),
+    Column("vcp_id", String, nullable=False),
+    Column("symbol", String, nullable=False),
+    Column("company", String),
+    Column("fno_status", String),
+    Column("in_nifty500", Integer),
+    Column("timeframe", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("status_reason", String),
+    Column("qualified", Integer, nullable=False),
+    Column("quality", Float, nullable=False),
+    Column("contractions", Integer, nullable=False),
+    Column("base_start", String, nullable=False),
+    Column("base_end", String, nullable=False),
+    Column("base_sessions", Integer, nullable=False),
+    Column("pivot", Float),
+    Column("pivot_time", String),
+    Column("final_depth_pct", Float),
+    Column("depths_json", Text),
+    Column("last_close", Float),
+    Column("pivot_distance_pct", Float),
+    Column("breakout_time", String),
+    Column("last_candle_time", String),
+    Column("metrics_json", Text, nullable=False),
+    Column("quality_json", Text, nullable=False),
+    Column("gates_json", Text, nullable=False),
+    Column("explanation_json", Text, nullable=False),
+    Column("geometry_json", Text, nullable=False),
+    Column("config_version", String, nullable=False),
+    Column("config_hash", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    PrimaryKeyConstraint("scan_id", "vcp_id"),
+)
+Index("ix_vcp_symbol", vcp_formations.c.symbol, vcp_formations.c.timeframe)
+Index("ix_vcp_id", vcp_formations.c.vcp_id)
+
+vcp_contractions = Table(
+    "vcp_contractions",
+    metadata,
+    Column("scan_id", String, nullable=False),
+    Column("vcp_id", String, nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("start_time", String, nullable=False),
+    Column("end_time", String, nullable=False),
+    Column("start_price", Float, nullable=False),
+    Column("end_price", Float, nullable=False),
+    Column("depth", Float, nullable=False),
+    Column("depth_pct", Float, nullable=False),
+    Column("bars", Integer, nullable=False),
+    Column("avg_volume", Float),
+    Column("min_volume", Float),
+    Column("volume_vs_avg50", Float),
+    Column("provisional", Integer, nullable=False),
+    PrimaryKeyConstraint("scan_id", "vcp_id", "seq"),
+)
+
+confluence_runs = Table(
+    "confluence_runs",
+    metadata,
+    Column("snapshot_id", String, primary_key=True),
+    Column("created_at", String, nullable=False),
+    Column("timeframe", String, nullable=False),
+    Column("asof", String),
+    Column("primary_scan_id", String, nullable=False),
+    Column("context_scan_id", String),
+    Column("inputs_key", String, nullable=False),
+    Column("config_version", String, nullable=False),
+    Column("config_hash", String, nullable=False),
+    Column("counts_json", Text),
+)
+Index("ix_confluence_runs_inputs", confluence_runs.c.inputs_key)
+
+confluence_snapshots = Table(
+    "confluence_snapshots",
+    metadata,
+    Column("snapshot_id", String, nullable=False),
+    Column("symbol", String, nullable=False),
+    Column("direction", String, nullable=False),  # bullish | bearish (scored separately)
+    Column("company", String),
+    Column("fno_status", String),
+    Column("in_nifty500", Integer),
+    Column("timeframe", String, nullable=False),
+    Column("close", Float),
+    Column("score", Float, nullable=False),
+    Column("base_score", Float, nullable=False),
+    Column("bonus", Float, nullable=False),
+    Column("band", String, nullable=False),
+    Column("coverage", Float, nullable=False),
+    Column("ranked", Integer, nullable=False),
+    Column("active_signals", Integer, nullable=False),
+    Column("latest_signal_time", String),
+    Column("summary_json", Text, nullable=False),
+    Column("explanation_json", Text, nullable=False),
+    PrimaryKeyConstraint("snapshot_id", "symbol", "direction"),
+)
+
+# Manual chart drawings (docs/chart-drawing-persistence.md): anchored to
+# (candle time, price), per symbol, optional timeframe visibility, versioned.
+chart_drawings = Table(
+    "chart_drawings",
+    metadata,
+    Column("drawing_id", String, primary_key=True),
+    Column("instrument", String, nullable=False),  # stock | index
+    Column("symbol", String, nullable=False),
+    Column("drawing_type", String, nullable=False),
+    Column("anchors_json", Text, nullable=False),  # [{"t": epoch s, "p": price}, ...]
+    Column("color", String, nullable=False),
+    Column("line_style", String, nullable=False),  # solid | dashed | dotted
+    Column("line_width", Integer, nullable=False),
+    Column("style_json", Text),  # opacity, label, extend, ...
+    Column("settings_json", Text),  # Fibonacci configuration
+    Column("visible", Integer, nullable=False),
+    Column("timeframes_json", Text),  # null = every timeframe
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("origin", String),  # ui | import | legacy_browser
+)
+Index("ix_chart_drawings_symbol", chart_drawings.c.instrument, chart_drawings.c.symbol)
+
+chart_drawing_history = Table(
+    "chart_drawing_history",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("drawing_id", String, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("action", String, nullable=False),  # create | update | delete | import
+    Column("payload_json", Text, nullable=False),
+    Column("at", String, nullable=False),
+)
+Index("ix_drawing_history_id", chart_drawing_history.c.drawing_id)
+
+drawing_templates = Table(
+    "drawing_templates",
+    metadata,
+    Column("template_id", String, primary_key=True),
+    Column("name", String, nullable=False),
+    Column("drawing_type", String, nullable=False),
+    Column("scope", String, nullable=False),  # global | symbol
+    Column("symbol", String),
+    Column("settings_json", Text, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+)
+
+# Official NSE "52 week high / low" report (adjusted for corporate actions by NSE).
+nse_52w_reference = Table(
+    "nse_52w_reference",
+    metadata,
+    Column("report_date", String, nullable=False),
+    Column("symbol", String, nullable=False),
+    Column("series", String),
+    Column("adj_high", Float),
+    Column("adj_high_date", String),
+    Column("adj_low", Float),
+    Column("adj_low_date", String),
+    Column("fetched_at", String, nullable=False),
+    Column("source", String, nullable=False),
+    PrimaryKeyConstraint("report_date", "symbol"),
+)
+
+ADVANCED_TABLES = [
+    signal_evidence,
+    vcp_formations,
+    vcp_contractions,
+    confluence_runs,
+    confluence_snapshots,
+    chart_drawings,
+    chart_drawing_history,
+    drawing_templates,
+    nse_52w_reference,
+]
+
 
 def _migration_1(conn: Connection) -> None:
     metadata.create_all(conn, tables=V1_TABLES, checkfirst=True)
@@ -574,6 +794,15 @@ def _migration_7(conn: Connection) -> None:
     )
 
 
+def _migration_8(conn: Connection) -> None:
+    """Advanced scanners: normalized signal evidence, VCP, confluence snapshots,
+    database-backed chart drawings, official NSE 52-week reference. Existing rows
+    are untouched; old scans simply have no evidence rows."""
+    metadata.create_all(conn, tables=ADVANCED_TABLES, checkfirst=True)
+    for col in ("signal_config_version", "signal_config_hash", "vcp_config_version", "vcp_config_hash"):
+        _add_column(conn, "scans", col)
+
+
 # Append-only. Never edit a released migration; add a new one instead.
 MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (1, "initial schema: universe, market data metadata, scans, detections, geometry, lifecycle", _migration_1),
@@ -583,6 +812,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (5, "NSE index registry and RRG runs (E2)", _migration_5),
     (6, "Stage Analysis results; scans.stage_config_version/hash (E3)", _migration_6),
     (7, "market_data.history_period: history depth of each cache (full-history backfill)", _migration_7),
+    (8, "signal evidence, VCP, confluence snapshots, chart drawings, NSE 52-week reference; scans signal/VCP config", _migration_8),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

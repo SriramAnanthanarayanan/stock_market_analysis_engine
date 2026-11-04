@@ -6,6 +6,9 @@ import { CandlestickScanner } from "./pages/CandlestickScanner";
 import { Dashboard } from "./pages/Dashboard";
 import { Evaluation } from "./pages/Evaluation";
 import { Explorer } from "./pages/Explorer";
+import { FreshBreakoutScanner } from "./pages/FreshBreakoutScanner";
+import { VolumeShocker } from "./pages/VolumeShocker";
+import { Week52Scanner } from "./pages/Week52Scanner";
 import { History } from "./pages/History";
 import { IndexAnalysis } from "./pages/IndexAnalysis";
 import { IndexExplorer } from "./pages/IndexExplorer";
@@ -16,6 +19,9 @@ import { StageAnalysis } from "./pages/StageAnalysis";
 const NAV: { to: string; label: string; testid: string; end?: boolean; group?: string }[] = [
   { to: "/", label: "Pattern Scanner", testid: "nav-scanner", end: true, group: "Scanners" },
   { to: "/candlesticks", label: "Candlestick Scanner", testid: "nav-candlesticks" },
+  { to: "/fresh-breakouts", label: "Fresh Breakouts", testid: "nav-fresh-breakouts" },
+  { to: "/52-week", label: "52-Week Breakouts", testid: "nav-52week" },
+  { to: "/volume-shocker", label: "Volume Shocker", testid: "nav-volume" },
   { to: "/breakouts", label: "Breakout Scanner", testid: "nav-breakouts" },
   { to: "/indicators", label: "Indicator Scanner", testid: "nav-indicators" },
   { to: "/rrg", label: "RRG", testid: "nav-rrg", group: "Markets" },
@@ -60,6 +66,9 @@ export default function App() {
             <Route path="/explorer/:symbol" element={<Explorer />} />
             <Route path="/candlesticks" element={<CandlestickScanner />} />
             <Route path="/breakouts" element={<BreakoutScanner />} />
+            <Route path="/fresh-breakouts" element={<FreshBreakoutScanner />} />
+            <Route path="/52-week" element={<Week52Scanner />} />
+            <Route path="/volume-shocker" element={<VolumeShocker />} />
             <Route path="/indicators" element={<IndicatorScanner />} />
             <Route path="/rrg" element={<RRG />} />
             <Route path="/stage" element={<StageAnalysis />} />

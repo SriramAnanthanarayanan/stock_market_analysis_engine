@@ -95,6 +95,10 @@ class ScanScheduler:
             return True, "technical-analysis configuration changed"
         if timeframe == "1w" and last.get("stage_config_hash") != self.s.stage_config_hash:
             return True, "Stage Analysis configuration changed"
+        if last.get("signal_config_hash") != self.s.signal_config_hash:
+            return True, "signal scanner configuration changed (breakouts / 52-week / Volume Shocker)"
+        if timeframe == "1d" and last.get("vcp_config_hash") != self.s.vcp_config_hash:
+            return True, "VCP configuration changed"
         started = parse_iso(last.get("started_at"))
         if started is None or started < latest_end + settle:
             return True, f"new completed {timeframe} candle (ended {latest_end.isoformat()})"
@@ -129,3 +133,9 @@ class ScanScheduler:
         self.s.universe.refresh_fno()
         if self.s.universe.refresh_holidays().get("status") == "ok":
             self.s.reload_calendar()
+        # Official NSE 52-week high/low report of the last completed session (optional
+        # cross-check shown by the 52-week scanner; failures are only recorded).
+        from .signals import nse52w
+
+        res = nse52w.refresh(self.s.engine, self.s.calendar.latest_completed_bar_end("1d", now_ist()).date())
+        self.last_decisions["nse_52w_report"] = f"{res.get('report_date')}: {res.get('status')} {res.get('error', '')}".strip()

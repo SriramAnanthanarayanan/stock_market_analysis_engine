@@ -9,7 +9,24 @@ from datetime import timedelta
 from typing import Any
 
 from . import database as db
-from .config import DEFAULT_CONFIG, DEFAULT_INDEX_CONFIG, DEFAULT_STAGE_CONFIG, DEFAULT_TECH_CONFIG, DetectionConfig, IndexConfig, Settings, StageConfig, TechnicalConfig, config_hash
+from .config import (
+    DEFAULT_CONFIG,
+    DEFAULT_CONFLUENCE_CONFIG,
+    DEFAULT_INDEX_CONFIG,
+    DEFAULT_SIGNAL_CONFIG,
+    DEFAULT_STAGE_CONFIG,
+    DEFAULT_TECH_CONFIG,
+    DEFAULT_VCP_CONFIG,
+    ConfluenceConfig,
+    DetectionConfig,
+    IndexConfig,
+    Settings,
+    SignalConfig,
+    StageConfig,
+    TechnicalConfig,
+    VCPConfig,
+    config_hash,
+)
 from .data.calendar import NSECalendar
 from .data.store import MarketDataService, OhlcvStore
 from .data.universe import UniverseService
@@ -30,12 +47,18 @@ class Services:
         index_cfg: IndexConfig = DEFAULT_INDEX_CONFIG,
         index_history=None,
         stage_cfg: StageConfig = DEFAULT_STAGE_CONFIG,
+        signal_cfg: SignalConfig = DEFAULT_SIGNAL_CONFIG,
+        vcp_cfg: VCPConfig = DEFAULT_VCP_CONFIG,
+        confluence_cfg: ConfluenceConfig = DEFAULT_CONFLUENCE_CONFIG,
     ):
         self.settings = settings
         self.cfg = cfg
         self.tech_cfg = tech_cfg
         self.index_cfg = index_cfg
         self.stage_cfg = stage_cfg
+        self.signal_cfg = signal_cfg
+        self.vcp_cfg = vcp_cfg
+        self.confluence_cfg = confluence_cfg
         self.started_at = time.time()
         for d in (settings.data_dir, settings.cache_dir):
             d.mkdir(parents=True, exist_ok=True)
@@ -92,6 +115,18 @@ class Services:
     def stage_config_hash(self) -> str:
         return config_hash(self.stage_cfg)
 
+    @property
+    def signal_config_hash(self) -> str:
+        return config_hash(self.signal_cfg)
+
+    @property
+    def vcp_config_hash(self) -> str:
+        return config_hash(self.vcp_cfg)
+
+    @property
+    def confluence_config_hash(self) -> str:
+        return config_hash(self.confluence_cfg)
+
     # ------------------------------------------------------------ lifecycle
     def startup(self, background: bool = True) -> None:
         version = db.migrate(self.engine)
@@ -99,6 +134,9 @@ class Services:
         register_config(self.engine, self.tech_cfg)
         register_config(self.engine, self.index_cfg)
         register_config(self.engine, self.stage_cfg)
+        register_config(self.engine, self.signal_cfg)
+        register_config(self.engine, self.vcp_cfg)
+        register_config(self.engine, self.confluence_cfg)
         interrupted = self.scans.recover()
         log.info("database schema v%s ready (%s); %s interrupted scans marked", version, self.settings.db_path, interrupted)
         if background:

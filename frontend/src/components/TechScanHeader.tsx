@@ -1,6 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api/client";
-import type { ScanSummary, TechScanSummary, Timeframe, Universe } from "../api/types";
+import type { ScanSummary, Timeframe, Universe } from "../api/types";
+
+/** The scan fields the header shows (technical and advanced scan summaries both fit). */
+export interface HeaderScan {
+  scan_id: string;
+  finished_at: string | null;
+  successful_symbols: number;
+  price_basis: string | null;
+  tech_config_version?: string | null;
+  signal_config_version?: string | null;
+}
 import { fmtDateTime } from "../lib/format";
 import { TIMEFRAMES, UNIVERSES } from "../lib/status";
 
@@ -11,7 +21,7 @@ interface Props {
   timeframe: Timeframe | null; // null = fixed (breakouts are always daily)
   asof: string;
   onChange: (patch: { universe?: Universe; timeframe?: Timeframe; asof?: string }) => void;
-  scan: TechScanSummary | null;
+  scan: HeaderScan | null;
   onScanDone: () => void;
   children?: ReactNode;
 }
@@ -87,7 +97,8 @@ export function TechScanHeader(p: Props) {
                 Scan {p.scan.scan_id} · {fmtDateTime(p.scan.finished_at)}
               </div>
               <div>
-                {p.scan.successful_symbols} symbols · basis {p.scan.price_basis ?? "?"} · technical config v{p.scan.tech_config_version ?? "-"}
+                {p.scan.successful_symbols} symbols · basis {p.scan.price_basis ?? "?"} ·{" "}
+                {p.scan.signal_config_version !== undefined ? `signal config v${p.scan.signal_config_version ?? "-"}` : `technical config v${p.scan.tech_config_version ?? "-"}`}
               </div>
             </>
           ) : (

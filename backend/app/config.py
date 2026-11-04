@@ -743,3 +743,300 @@ KNOWN_STAGE_CONFIG_HASHES: dict[str, str] = {
 
 DEFAULT_STAGE_CONFIG = StageConfig()
 
+
+
+# ====================================================================== Advanced
+# Advanced breakout / volume / 52-week scanners (SignalConfig), the Volatility
+# Contraction Pattern detector (VCPConfig) and the Confluence Dashboard
+# (ConfluenceConfig). Each is versioned and hashed on its own, so a change here
+# never alters pattern detections, technical signals, RRG or Stage Analysis.
+# Every number is an initial engineering default (not a validated constant);
+# values marked ASSUMPTION have no quantified source. Change a value -> bump
+# ``version`` and register the new hash in the matching KNOWN_* table.
+
+# Multi-month chart timeframes are aggregated from completed daily candles. They
+# are chart timeframes only: no scan, pattern detector or Stage Analysis runs on
+# them (CHART_TIMEFRAMES = scan timeframes + these).
+MULTI_MONTH_TIMEFRAMES: tuple[str, ...] = ("1mo", "3mo", "6mo", "12mo")
+CHART_TIMEFRAMES: tuple[str, ...] = TIMEFRAMES + MULTI_MONTH_TIMEFRAMES
+MULTI_MONTH_MONTHS: dict[str, int] = {"1mo": 1, "3mo": 3, "6mo": 6, "12mo": 12}
+TIMEFRAME_LABELS: dict[str, str] = {
+    "1h": "1 Hour", "4h": "4 Hours", "1d": "1 Day", "1w": "1 Week",
+    "1mo": "1 Month", "3mo": "3 Months", "6mo": "6 Months", "12mo": "12 Months",
+}
+CHART_SOURCE_INTERVAL: dict[str, str] = {**TIMEFRAME_SOURCE_INTERVAL, "1mo": "1d", "3mo": "1d", "6mo": "1d", "12mo": "1d"}
+
+# Which analysis runs on which timeframe. Anything not listed for a timeframe is
+# not computed there (and the UI says so) - nothing is run "blindly".
+DETECTOR_TIMEFRAMES: dict[str, tuple[str, ...]] = {
+    "price_action_patterns": TIMEFRAMES,
+    "support_resistance": TIMEFRAMES,
+    "marubozu": TIMEFRAMES,
+    "rsi_divergence": TIMEFRAMES,
+    "ema_crossovers": TIMEFRAMES,
+    "breakout_10d": ("1d",),
+    "fresh_breakout": ("1d",),
+    "week52": ("1d",),
+    "volume_shocker": TIMEFRAMES,
+    "vcp": ("1d",),
+    "stage_analysis": ("1w",),
+    "rs_line": TIMEFRAMES,
+    # Indicators are formulas, not detectors: shown on every chart timeframe,
+    # flagged "not validated" on the multi-month timeframes.
+    "indicators": CHART_TIMEFRAMES,
+}
+
+
+def _vs_liquidity() -> dict[str, float]:
+    # Rupees of average traded value per bar of that timeframe (close x volume).
+    return {"1h": 1.5e6, "4h": 4.0e6, "1d": 1.0e7, "1w": 5.0e7}
+
+
+@dataclass(frozen=True)
+class SignalConfig:
+    version: str = "1.0.0"
+    atr_period: int = 14  # must equal DetectionConfig.atr_period (enforced by tests)
+
+    # ---- Fresh N-day breakout (spec 3): previous N completed daily candles, current excluded
+    fresh_lookback_days: int = 10
+    fresh_buffer_atr: float = 0.10
+    fresh_touch_buffer_atr: float = 0.0
+    fresh_require_prior_level_clear: bool = True
+    fresh_first_lookback_sessions: int = 20
+    fresh_rearm_closes: int = 3
+    fresh_rearm_on_new_range: bool = True
+    fresh_volume_lookback: int = 20
+    fresh_store_sessions: int = 60
+    touch_store_sessions: int = 5
+
+    # ---- 52-week high breakout / low breakdown (spec 5)
+    w52_lookback_sessions: int = 252
+    w52_buffer_atr: float = 0.10
+    w52_touch_buffer_atr: float = 0.0
+    w52_require_prior_level_clear: bool = True
+    w52_rearm_closes: int = 3
+    w52_volume_lookback: int = 20
+    w52_store_sessions: int = 20
+
+    # ---- Volume Shocker (spec 4)
+    vs_lookback: int = 20
+    vs_long_lookback: int = 50
+    vs_percentile_lookback: int = 60
+    vs_percentile: float = 90.0
+    vs_min_valid_frac: float = 0.75
+    vs_rvol_threshold: float = 2.0
+    vs_rvol_options: tuple[float, ...] = (1.5, 2.0, 3.0, 5.0)
+    vs_require_percentile: bool = False
+    vs_min_body_frac: float = 0.30
+    vs_close_location_split: float = 0.50
+    vs_recent_range_bars: int = 20
+    vs_min_avg_traded_value: dict[str, float] = field(default_factory=_vs_liquidity)
+    vs_store_bars: int = 5
+
+
+SIGNAL_PARAM_META: dict[str, ParamMeta] = {
+    "atr_period": ParamMeta("ATR period, Wilder smoothing (TradingView ta.atr). Shared with pattern detection.", "bars", ("ATR",)),
+    "fresh_lookback_days": ParamMeta("Reference window: previous N completed daily candles (current candle excluded). ref_high[t] = max(high[t-N..t-1]).", "daily bars", ("Fresh breakout",), ("1d",)),
+    "fresh_buffer_atr": ParamMeta("Break buffer: close must exceed ref_high (fall below ref_low) by this x ATR(14) at the breakout candle.", "x ATR", ("Fresh breakout",), ("1d",)),
+    "fresh_touch_buffer_atr": ParamMeta("Intraday touch: the candle high exceeds ref_high (low below ref_low) by more than this x ATR, whatever the close.", "x ATR", ("Fresh breakout",), ("1d",)),
+    "fresh_require_prior_level_clear": ParamMeta("Genuine crossing: the close must also clear the previous candle's own reference level (+ buffer), so a level that only dropped because an old high rolled out of the window is not a breakout.", "flag", ("Fresh breakout",), ("1d",)),
+    "fresh_first_lookback_sessions": ParamMeta("First Breakout in Lookback (Filter B) default N: no close beyond its own reference level (same direction) in the preceding N completed sessions.", "sessions", ("Fresh breakout",), ("1d",)),
+    "fresh_rearm_closes": ParamMeta("Re-arming: after an event, this many consecutive completed closes back inside the prior reference range (at or below the broken high / at or above the broken low) before another event can be reported.", "closes", ("Fresh breakout",), ("1d",)),
+    "fresh_rearm_on_new_range": ParamMeta("A fresh crossing of a reference window that starts after the previous event's breakout candle (a new N-session range formed above the old level) creates a new event without the close-back rule.", "flag", ("Fresh breakout",), ("1d",)),
+    "fresh_volume_lookback": ParamMeta("Volume ratio of the breakout candle against the mean of the previous N completed daily candles.", "bars", ("Fresh breakout",), ("1d",)),
+    "fresh_store_sessions": ParamMeta("Events whose breakout candle lies within the last N completed sessions are stored by each daily scan (sessions-since-breakout filter range).", "sessions", ("Fresh breakout",), ("1d",)),
+    "touch_store_sessions": ParamMeta("Provisional intraday touches (10-day and 52-week levels) of the last N completed sessions are stored by each daily scan.", "sessions", ("Fresh breakout", "52-week"), ("1d",)),
+    "w52_lookback_sessions": ParamMeta("52-week reference: previous 252 completed daily sessions (current excluded); fewer -> INSUFFICIENT_HISTORY.", "sessions", ("52-week",), ("1d",)),
+    "w52_buffer_atr": ParamMeta("Close must exceed the previous 52-week high (fall below the low) by this x ATR(14).", "x ATR", ("52-week",), ("1d",)),
+    "w52_touch_buffer_atr": ParamMeta("Intraday touch of the 52-week level: high (low) beyond the level by more than this x ATR, whatever the close.", "x ATR", ("52-week",), ("1d",)),
+    "w52_require_prior_level_clear": ParamMeta("Genuine crossing on the 52-week window (same rule as the fresh breakout).", "flag", ("52-week",), ("1d",)),
+    "w52_rearm_closes": ParamMeta("Consecutive completed closes back inside the previous 52-week range before a new 52-week event is reported.", "closes", ("52-week",), ("1d",)),
+    "w52_volume_lookback": ParamMeta("Volume ratio of the breakout candle against the mean of the previous N completed daily candles.", "bars", ("52-week",), ("1d",)),
+    "w52_store_sessions": ParamMeta("52-week events within the last N completed sessions are stored by each daily scan.", "sessions", ("52-week",), ("1d",)),
+    "vs_lookback": ParamMeta("RVOL reference: mean volume of the previous N completed candles (current excluded); intraday: the same time-of-day candle of the previous N sessions.", "bars", ("Volume Shocker",)),
+    "vs_long_lookback": ParamMeta("Second reference: volume / mean of the previous N completed candles (same exclusions).", "bars", ("Volume Shocker",)),
+    "vs_percentile_lookback": ParamMeta("Volume percentile of the current candle within the previous N completed candles.", "bars", ("Volume Shocker",)),
+    "vs_percentile": ParamMeta("Optional percentile condition: current volume >= this percentile of the previous N candles.", "percentile", ("Volume Shocker",)),
+    "vs_min_valid_frac": ParamMeta("A reference window needs at least this share of candles with a known volume; otherwise RVOL is not computed (missing volume is never guessed).", "fraction", ("Volume Shocker",)),
+    "vs_rvol_threshold": ParamMeta("Default shock threshold: RVOL >= this. A screening threshold, not a validated prediction.", "x average", ("Volume Shocker",)),
+    "vs_rvol_options": ParamMeta("Selectable RVOL thresholds; candles with RVOL >= the smallest are stored.", "x average", ("Volume Shocker",)),
+    "vs_require_percentile": ParamMeta("Default for the optional percentile condition (the scanner can switch it per request).", "flag", ("Volume Shocker",)),
+    "vs_min_body_frac": ParamMeta("ASSUMPTION: a 'meaningful directional close' needs a body of at least this share of the candle range; otherwise the shock is Neutral.", "fraction", ("Volume Shocker",)),
+    "vs_close_location_split": ParamMeta("ASSUMPTION: Bullish needs close location (close - low) / range >= this, Bearish <= 1 - this.", "fraction", ("Volume Shocker",)),
+    "vs_recent_range_bars": ParamMeta("Context: distance from the high / low of the previous N completed candles.", "bars", ("Volume Shocker",)),
+    "vs_min_avg_traded_value": ParamMeta("ASSUMPTION: optional liquidity filter - minimum average traded value (close x volume, rupees) per candle over the reference window, by timeframe.", "INR per bar", ("Volume Shocker",), TIMEFRAMES),
+    "vs_store_bars": ParamMeta("Volume shocks of the last N completed candles are stored by each scan.", "bars", ("Volume Shocker",)),
+}
+
+
+def _vcp_weights() -> dict[str, float]:
+    return {"contraction_progression": 30, "volume_contraction": 25, "final_tightness": 20, "base_trend": 15, "pivot_quality": 10}
+
+
+@dataclass(frozen=True)
+class VCPConfig:
+    version: str = "1.0.0"
+    atr_period: int = 14
+    # ---- structure (Minervini: 2-4 contractions typical, 2-6 broadest; T1 > T2 > ...)
+    swing_k: int = 3
+    min_base_sessions: int = 15
+    max_base_sessions: int = 65
+    min_contractions: int = 2
+    max_contractions: int = 6
+    contraction_ratio_max: float = 0.75
+    min_contraction_depth_pct: float = 2.0
+    min_recovery_frac: float = 0.50
+    base_high_tolerance_pct: float = 3.0
+    base_start_high_lookback: int = 50
+    # ---- preceding uptrend
+    prior_trend_lookback: int = 126
+    prior_advance_min_pct: float = 25.0
+    # ---- final contraction and volume dry-up
+    final_max_depth_pct: float = 10.0
+    volume_avg_lookback: int = 50
+    volume_final_vs_first_max: float = 0.85
+    volume_dry_up_ratio: float = 0.60
+    # ---- pivot, breakout, lifecycle
+    near_pivot_pct: float = 3.0
+    breakout_buffer_atr: float = 0.0
+    breakout_volume_ratio: float = 1.5
+    breakout_confirm_closes: int = 1
+    failed_breakout_closes: int = 2
+    post_breakout_track_sessions: int = 15
+    invalidation_buffer_atr: float = 0.0
+    # ---- quality score (placeholders, not validated)
+    weights: dict[str, float] = field(default_factory=_vcp_weights)
+    score_ratio_ideal: float = 0.50
+    score_tight_full_pct: float = 3.0
+    score_volume_trend_full: float = 0.50
+    score_final_vs_avg_full: float = 0.60
+    score_final_vs_avg_zero: float = 1.00
+    score_advance_full_pct: float = 60.0
+    score_pivot_gap_full_pct: float = 3.0
+    score_pivot_gap_zero_pct: float = 15.0
+
+
+VCP_SOURCE_PARAMS = ("min_contractions", "max_contractions")
+VCP_PARAM_META: dict[str, ParamMeta] = {
+    "atr_period": ParamMeta("ATR period, Wilder smoothing. Shared with pattern detection.", "bars", ("VCP",), ("1d",)),
+    "swing_k": ParamMeta("Contraction highs are confirmed swing highs (k completed bars each side); lows are confirmed swing lows except the developing final low.", "bars", ("VCP",), ("1d",)),
+    "min_base_sessions": ParamMeta("ENGINEERING: shortest base (first contraction high to the latest / breakout candle). Initial search range, not a Minervini rule.", "sessions", ("VCP",), ("1d",)),
+    "max_base_sessions": ParamMeta("ENGINEERING: longest base searched on daily candles.", "sessions", ("VCP",), ("1d",)),
+    "min_contractions": ParamMeta("SOURCE (Minervini): at least two contractions; two to four is typical.", "contractions", ("VCP",), ("1d",)),
+    "max_contractions": ParamMeta("SOURCE (Minervini): up to six contractions in broad examples.", "contractions", ("VCP",), ("1d",)),
+    "contraction_ratio_max": ParamMeta("ENGINEERING: every contraction depth <= this x the previous depth (T1 > T2 > T3 ...). Initial tolerance, not a universal Minervini rule.", "ratio", ("VCP",), ("1d",)),
+    "min_contraction_depth_pct": ParamMeta("ENGINEERING: a pullback smaller than this % of its high is noise and does not count as a contraction.", "%", ("VCP",), ("1d",)),
+    "min_recovery_frac": ParamMeta("ENGINEERING: a new contraction starts only at a swing high that recovered at least this share of the previous contraction's decline (a bounce inside a decline is not a new contraction).", "fraction", ("VCP",), ("1d",)),
+    "base_high_tolerance_pct": ParamMeta("ENGINEERING: before a breakout no later high may exceed the base's first high by more than this % (otherwise the base start is not the base high).", "%", ("VCP",), ("1d",)),
+    "base_start_high_lookback": ParamMeta("ENGINEERING: the first contraction high must be the highest high of the previous N sessions (the base starts at a high).", "sessions", ("VCP",), ("1d",)),
+    "prior_trend_lookback": ParamMeta("ENGINEERING: sessions before the base searched for the low the preceding advance started from.", "sessions", ("VCP",), ("1d",)),
+    "prior_advance_min_pct": ParamMeta("ASSUMPTION: preceding uptrend = base high / lowest low of the prior window - 1 >= this % (Minervini requires a prior uptrend; the number is an engineering default).", "%", ("VCP",), ("1d",)),
+    "final_max_depth_pct": ParamMeta("ENGINEERING: the final contraction is 'tight' when its depth <= this %. A wide final contraction stays Forming.", "%", ("VCP",), ("1d",)),
+    "volume_avg_lookback": ParamMeta("Reference volume: mean of the N completed sessions before each contraction starts (prior 50-day average).", "sessions", ("VCP",), ("1d",)),
+    "volume_final_vs_first_max": ParamMeta("ENGINEERING gate: mean volume of the final contraction <= this x the mean volume of T1 (supply drying up).", "ratio", ("VCP",), ("1d",)),
+    "volume_dry_up_ratio": ParamMeta("ENGINEERING: a session with volume <= this x the prior 50-day average counts as a dry-up day (recorded; never sufficient on its own).", "ratio", ("VCP",), ("1d",)),
+    "near_pivot_pct": ParamMeta("Near Pivot when the close is within this % below the pivot.", "%", ("VCP",), ("1d",)),
+    "breakout_buffer_atr": ParamMeta("Breakout: completed close > pivot + this x ATR (0 = close above the pivot, spec 6.7).", "x ATR", ("VCP",), ("1d",)),
+    "breakout_volume_ratio": ParamMeta("Breakout volume must be >= this x the previous 50-day average volume (spec 6.7 initial 1.5x).", "ratio", ("VCP",), ("1d",)),
+    "breakout_confirm_closes": ParamMeta("1 = one completed close above the pivot; 2 = two consecutive closes (pending until the second).", "closes", ("VCP",), ("1d",)),
+    "failed_breakout_closes": ParamMeta("ENGINEERING: consecutive closes back below the pivot after a breakout -> Failed Breakout.", "closes", ("VCP",), ("1d",)),
+    "post_breakout_track_sessions": ParamMeta("A breakout (or failure) is reported for this many sessions after the breakout candle.", "sessions", ("VCP",), ("1d",)),
+    "invalidation_buffer_atr": ParamMeta("Invalidated when a close falls below the final contraction low (or the base low) by more than this x ATR.", "x ATR", ("VCP",), ("1d",)),
+    "weights": ParamMeta("Quality weights (spec 6.9 initial weights; placeholders, not validated). Score = 100 x weighted mean of 0-1 components.", "weight", ("VCP",), ("1d",)),
+    "score_ratio_ideal": ParamMeta("Progression component = 1 when the mean depth ratio T(i+1)/T(i) <= this; 0 at contraction_ratio_max.", "ratio", ("VCP",), ("1d",)),
+    "score_tight_full_pct": ParamMeta("Tightness component = 1 when the final depth <= this %; 0 at final_max_depth_pct.", "%", ("VCP",), ("1d",)),
+    "score_volume_trend_full": ParamMeta("Volume-trend sub-score = 1 when final / T1 mean volume <= this; 0 at volume_final_vs_first_max.", "ratio", ("VCP",), ("1d",)),
+    "score_final_vs_avg_full": ParamMeta("Dry-up sub-score = 1 when the final contraction's volume / prior 50-day average <= this.", "ratio", ("VCP",), ("1d",)),
+    "score_final_vs_avg_zero": ParamMeta("Dry-up sub-score = 0 when that ratio >= this.", "ratio", ("VCP",), ("1d",)),
+    "score_advance_full_pct": ParamMeta("Trend sub-score = 1 when the preceding advance >= this %.", "%", ("VCP",), ("1d",)),
+    "score_pivot_gap_full_pct": ParamMeta("Pivot component = 1 when the pivot is within this % of the base's first high.", "%", ("VCP",), ("1d",)),
+    "score_pivot_gap_zero_pct": ParamMeta("Pivot component = 0 when the pivot is this % or more below the base's first high.", "%", ("VCP",), ("1d",)),
+}
+
+
+def _cf_weights() -> dict[str, float]:
+    return {"trend": 20, "setup": 25, "trigger": 20, "volume_candle": 25, "relative_strength": 10}
+
+
+def _cf_bands() -> dict[str, float]:
+    return {"Very High Confluence": 85.0, "High Confluence": 70.0, "Moderate Confluence": 55.0}
+
+
+def _cf_freshness() -> dict[str, int]:
+    # completed sessions (bars of the evidence timeframe) an event stays fresh
+    return {"fresh_breakout": 5, "week52": 5, "volume_shock": 3, "marubozu": 1, "pattern_breakout": 5, "vcp_breakout": 5}
+
+
+def _cf_combo() -> dict[str, float]:
+    return {"breakout_marubozu_volume": 10.0, "breakout_volume": 5.0, "breakout_marubozu": 4.0}
+
+
+def _cf_stage() -> dict[str, float]:
+    return {"stage2_confirmed": 1.0, "early_stage2": 0.8, "stage1": 0.4, "other": 0.0}
+
+
+def _cf_alignment() -> dict[str, float]:
+    return {"bullish_full": 1.0, "bullish_partial": 0.7, "mixed": 0.2, "bearish_partial": 0.0, "bearish_full": 0.0}
+
+
+def _cf_rrg() -> dict[str, float]:
+    return {"leading": 1.0, "improving": 0.6, "weakening": 0.4, "lagging": 0.0}
+
+
+@dataclass(frozen=True)
+class ConfluenceConfig:
+    version: str = "1.0.0"
+    weights: dict[str, float] = field(default_factory=_cf_weights)
+    bands: dict[str, float] = field(default_factory=_cf_bands)
+    freshness_sessions: dict[str, int] = field(default_factory=_cf_freshness)
+    min_coverage: float = 0.60
+    second_evidence_bonus: float = 0.15
+    agreement_bonus: float = 0.10
+    combo_points: dict[str, float] = field(default_factory=_cf_combo)
+    combo_max_age_sessions: int = 2
+    stage_scores: dict[str, float] = field(default_factory=_cf_stage)
+    alignment_scores: dict[str, float] = field(default_factory=_cf_alignment)
+    rrg_scores: dict[str, float] = field(default_factory=_cf_rrg)
+    rvol_zero: float = 1.5
+    rvol_full: float = 4.0
+    breakout_atr_full: float = 1.5
+    volume_share: float = 0.60
+    candle_share: float = 0.40
+    forming_factor: float = 0.6
+    non_first_breakout_factor: float = 0.8
+
+
+CONFLUENCE_PARAM_META: dict[str, ParamMeta] = {
+    "weights": ParamMeta("Category weights (spec 8.4 initial placeholders): trend, setup/structure, breakout/trigger, volume + candlestick, relative strength.", "weight", ("Confluence",)),
+    "bands": ParamMeta("Presentation bands (spec 8.6). Not calibrated probabilities.", "score", ("Confluence",)),
+    "freshness_sessions": ParamMeta("Completed sessions an event stays fresh (older events are listed as expired and never scored).", "sessions", ("Confluence",)),
+    "min_coverage": ParamMeta("A stock is ranked only when the categories with available data carry at least this share of the total weight.", "fraction", ("Confluence",)),
+    "second_evidence_bonus": ParamMeta("Inside a category the strongest evidence counts fully; one more independent piece (different family) adds at most this x its strength; the category is capped at 1.", "fraction", ("Confluence",)),
+    "agreement_bonus": ParamMeta("Correlated pairs (Stage vs EMA alignment, RS Line vs RRG): best of the two plus this when both agree (>= 0.6), capped at 1.", "fraction", ("Confluence",)),
+    "combo_points": ParamMeta("Same-session combination bonus in score points (best one applies; total capped at 100): fresh breakout + Marubozu + volume shock, breakout + volume shock, breakout + Marubozu.", "points", ("Confluence",)),
+    "combo_max_age_sessions": ParamMeta("The combination session must be at most this many completed sessions old; all parts on the same session.", "sessions", ("Confluence",)),
+    "stage_scores": ParamMeta("ASSUMPTION: bullish trend sub-score per Stage Analysis class (the user's stage rules are unchanged; this only maps them to 0-1).", "score", ("Confluence",)),
+    "alignment_scores": ParamMeta("ASSUMPTION: bullish trend sub-score per EMA alignment state (mirrored for bearish).", "score", ("Confluence",)),
+    "rrg_scores": ParamMeta("ASSUMPTION: bullish RS sub-score per RRG quadrant of the stock vs NIFTY 500 (mirrored for bearish).", "score", ("Confluence",)),
+    "rvol_zero": ParamMeta("Volume strength = 0 at this RVOL.", "x average", ("Confluence",)),
+    "rvol_full": ParamMeta("Volume strength = 1 at this RVOL (linear in between).", "x average", ("Confluence",)),
+    "breakout_atr_full": ParamMeta("Breakout strength reaches 1 when the close is this many ATRs beyond the level (0.5 at the level).", "x ATR", ("Confluence",)),
+    "volume_share": ParamMeta("Volume + candlestick category = volume_share x volume strength + candle_share x candle strength (different evidence types).", "fraction", ("Confluence",)),
+    "candle_share": ParamMeta("See volume_share.", "fraction", ("Confluence",)),
+    "forming_factor": ParamMeta("Structure still forming (VCP Forming, pattern Forming) counts with this factor.", "factor", ("Confluence",)),
+    "non_first_breakout_factor": ParamMeta("A fresh breakout that is not the first in its lookback counts with this factor.", "factor", ("Confluence",)),
+}
+
+KNOWN_SIGNAL_CONFIG_HASHES: dict[str, str] = {
+    "1.0.0": "803155cbb7249f12",  # fresh 10-day breakouts, 52-week, Volume Shocker (initial engineering defaults)
+}
+KNOWN_VCP_CONFIG_HASHES: dict[str, str] = {
+    "1.0.0": "819cd0e5d2a261bc",  # VCP detector (Minervini principles + engineering thresholds)
+}
+KNOWN_CONFLUENCE_CONFIG_HASHES: dict[str, str] = {
+    "1.0.0": "b1b29d836e9d6c12",  # five-category confluence score, placeholder weights
+}
+
+DEFAULT_SIGNAL_CONFIG = SignalConfig()
+DEFAULT_VCP_CONFIG = VCPConfig()
+DEFAULT_CONFLUENCE_CONFIG = ConfluenceConfig()

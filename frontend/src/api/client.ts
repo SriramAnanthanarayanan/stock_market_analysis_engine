@@ -42,7 +42,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { headers: { Accept: "application/json", "Content-Type": "application/json" }, ...init });
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
@@ -58,7 +58,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-function qs(params: Record<string, string | number | boolean | null | undefined>): string {
+export function qs(params: Record<string, string | number | boolean | null | undefined>): string {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === null || v === undefined || v === "") continue;
