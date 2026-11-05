@@ -74,6 +74,19 @@ def test_volume_shocker_scanner_and_filters(p1):
     assert [x for x in client.get("/api/scan/volume-shocks", params={"min_traded_value": 1e9, "liquidity": False}).json()["items"] if x["symbol"] == "RWALK"]
 
 
+def test_volume_state_is_context_not_a_listed_shock(p1):
+    """The latest candle's RVOL is stored as a ``volume_state`` row (confluence: "volume
+    unknown" vs "no unusual volume"); the Volume Shocker lists events only."""
+    client, _, _ = p1
+    ev = client.get("/api/evidence", params={"symbol": "RWALK", "source": "volume_shock"}).json()["items"]
+    state = [e for e in ev if e["signal_type"] == "volume_state"]
+    assert len(state) == 1 and state[0]["kind"] == "state" and state[0]["status"] == "ok" and state[0]["metrics"]["rvol"] >= 2.5
+    for params in ({"liquidity": False, "min_rvol": 1}, {"liquidity": False, "min_rvol": 1, "direction": "bullish"}, {"liquidity": False, "min_rvol": 1, "direction": "bearish"}):
+        items = client.get("/api/scan/volume-shocks", params=params).json()["items"]
+        assert all(x["kind"].startswith("volume_shock_") and x["direction"] in ("bullish", "bearish", "neutral") for x in items)
+    assert len([x for x in client.get("/api/scan/volume-shocks", params={"liquidity": False}).json()["items"] if x["symbol"] == "RWALK"]) == 1
+
+
 def test_52_week_scanner_views(p1):
     client, _, _ = p1
     st = client.get("/api/scan/52week", params={"view": "state", "include_insufficient": True}).json()

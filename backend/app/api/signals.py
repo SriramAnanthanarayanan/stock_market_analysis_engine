@@ -202,7 +202,8 @@ def scan_volume_shocks(
     if not has_signals(scan):
         return _empty(scan, NO_SIGNALS)
     t = db.signal_evidence
-    rows = evidence_rows(s, scan["scan_id"], universe, ("volume_shock",), t.c.age_bars <= max_age)
+    # events only: the per-candle ``volume_state`` row (kind "state") is context for the confluence engine
+    rows = evidence_rows(s, scan["scan_id"], universe, ("volume_shock",), and_(t.c.age_bars <= max_age, t.c.kind == "event"))
     rv = cfg.vs_rvol_threshold if min_rvol is None else min_rvol
     need_pct = cfg.vs_require_percentile if percentile is None else percentile
     floor = cfg.vs_min_avg_traded_value.get(timeframe, 0.0) if min_traded_value is None else min_traded_value

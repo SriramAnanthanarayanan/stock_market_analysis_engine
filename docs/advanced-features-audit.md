@@ -41,7 +41,7 @@ Audit of the repository before the "Advanced Breakout, VCP, Confluence & Chartin
 
 ## Schema changes (migration 8, append-only)
 
-New tables: `signal_evidence` (normalized evidence published by every scanner), `vcp_formations`, `vcp_contractions`, `confluence_snapshots`, `chart_drawings`, `chart_drawing_history`, `drawing_templates`, `nse_52w_reference`. New `scans` columns: `signal_config_version/hash`, `vcp_config_version/hash`. Existing rows are never rewritten.
+New tables: `signal_evidence` (normalized evidence published by every scanner), `vcp_formations`, `vcp_contractions`, `confluence_runs`, `confluence_snapshots`, `chart_drawings`, `chart_drawing_history`, `drawing_templates`, `nse_52w_reference`. New `scans` columns: `signal_config_version/hash`, `vcp_config_version/hash`. Existing rows are never rewritten.
 
 ## New versioned configurations
 

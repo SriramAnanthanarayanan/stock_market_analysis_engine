@@ -164,6 +164,16 @@ class Publisher:
                 explanation=[f"Volume {v['volume']:,.0f} = {v['rvol']}x the mean of the {v['reference_bars']} reference candles ({v['reference']}); {v['direction']} candle."],
             )
 
+    def volume_state(self, st: dict[str, Any], version: str, chash: str) -> None:
+        if not st.get("time"):
+            return
+        self.add(
+            source="volume_shock", signal_type="volume_state", category="context", kind="state", direction="neutral",
+            signal_time=st["time"], signal_t=st.get("t"), age_bars=0, status=st["status"], lifecycle="active", strength=st.get("rvol"),
+            metrics=st, config_version=version, config_hash=chash, expiry_rule="state: valid until the next scan",
+            explanation=[f"Latest candle RVOL {st.get('rvol')}" if st["status"] == "ok" else "Volume of the latest candle or its reference is unknown (never guessed)."],
+        )
+
     # ------------------------------------------------------------ existing scanners (adapters)
     def marubozu(self, signals: list[dict[str, Any]], version: str, chash: str) -> None:
         for s in signals:

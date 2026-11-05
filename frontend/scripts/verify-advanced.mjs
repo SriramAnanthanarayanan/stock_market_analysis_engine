@@ -110,9 +110,66 @@ try {
   } else {
     await page.goto(`${base}/`, { waitUntil: "networkidle" });
     console.log("Navigation");
-    const navs = ["nav-fresh-breakouts", "nav-52week", "nav-volume", "nav-vcp"];
+    const navs = ["nav-confluence", "nav-fresh-breakouts", "nav-52week", "nav-volume", "nav-vcp"];
     const present = await Promise.all(navs.map((n) => page.isVisible(`[data-testid="${n}"]`)));
     check("new scanners in the navigation", present.every(Boolean), navs.filter((_, i) => !present[i]).join(","));
+
+    console.log("Confluence Dashboard");
+    await page.click('[data-testid="nav-confluence"]');
+    await page.waitForSelector('[data-testid="confluence-dashboard"]');
+    await page.waitForSelector('[data-testid="confluence-table-row"]', { timeout: 15000 }).catch(() => null);
+    const cfRows = await rows("confluence-table").count();
+    const scores = (await page.locator('[data-testid="cf-score"]').allTextContents()).map(Number);
+    check("dashboard ranks stocks by confluence score", cfRows > 0 && scores.every((x, i) => i === 0 || scores[i - 1] >= x), `${cfRows} rows, top ${scores[0]}`);
+    const cfHead = await page.textContent('[data-testid="confluence-table"] thead');
+    const cfCols = ["Symbol", "Company", "Close", "Score", "Band", "Coverage", "Signals", "VCP", "10D", "52W", "Marubozu", "Vol shock", "Pattern", "EMA alignment", "Stage", "RS / RRG", "Latest signal"];
+    check("columns of spec 8.7 present", cfCols.every((c) => cfHead.includes(c)), cfCols.filter((c) => !cfHead.includes(c)).join(","));
+    check("snapshot, config and band counts shown", (await page.textContent('[data-testid="cf-snapshot"]')).includes("confluence config v") && (await page.isVisible('[data-testid="cf-band-counts"]')));
+    await page.screenshot({ path: join(outDir, "adv-confluence.png") });
+    await page.click('[data-testid="cf-screen-breakout_marubozu_volume"]');
+    await settle();
+    const comboRows = await rows("confluence-table").count();
+    const badges = await page.locator('[data-testid="confluence-table-row"] [data-testid="cf-combo-badge"]').count();
+    check("screen: fresh breakout + Marubozu + volume shock", comboRows > 0 && badges === comboRows && (await page.isVisible('[data-testid="cf-screen-description"]')), `${comboRows} rows, ${badges} with the combination bonus`);
+    if (comboRows) {
+      await rows("confluence-table").first().click();
+      await page.waitForSelector('[data-testid="confluence-breakdown"]');
+      const cats = await page.locator('[data-testid^="breakdown-cat-"]').count();
+      const uses = await page.locator('[data-testid="breakdown-evidence"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-status")));
+      check("row click: evidence breakdown with five categories", cats === 5 && uses.includes("used"), `${cats} categories, ${uses.length} evidence rows`);
+      check("capped / overlapping evidence is shown, not added", uses.some((u) => u === "bonus" || u === "overlapping"), [...new Set(uses)].join(","));
+      check("same-session combination explained", (await page.textContent('[data-testid="breakdown-combo"]')).includes("same session"));
+      await page.screenshot({ path: join(outDir, "adv-confluence-breakdown.png") });
+      const urlCf = page.url();
+      const cfSym = await openPreviewFrom("confluence-table");
+      check("symbol click opens the chart preview with the confluence context", (await page.textContent('[data-testid="preview-context"]')).includes("Confluence"), cfSym);
+      await page.screenshot({ path: join(outDir, "adv-confluence-preview.png") });
+      await closePreview();
+      check("dashboard filters kept after the preview", page.url() === urlCf && (await page.isVisible('[data-testid="confluence-breakdown"]')));
+    }
+    await page.click('[data-testid="cf-screen-all"]');
+    await page.click('[data-testid="cf-dir-bearish"]');
+    await settle();
+    const bearRows = await rows("confluence-table").count();
+    if (bearRows) {
+      await rows("confluence-table").first().click();
+      await page.waitForSelector('[data-testid="confluence-breakdown"]');
+    }
+    check("bearish confluence listed separately", bearRows === 0 || (await page.textContent('[data-testid="cf-detail"]')).includes("(bearish)"), `${bearRows} rows`);
+    await page.click('[data-testid="cf-dir-bullish"]');
+    await page.selectOption('[data-testid="cf-vcp"]', "breakout,breakout_pending");
+    await settle();
+    const vcpLabels = await page.locator('[data-testid="confluence-table-row"] td:nth-child(9)').allTextContents();
+    check("VCP status filter", vcpLabels.every((t) => /breakout/i.test(t)), vcpLabels.join(","));
+    await page.selectOption('[data-testid="cf-vcp"]', "");
+    await page.fill('[data-testid="cf-search"]', "rwal");
+    await settle(400);
+    check("search by symbol / company", (await rows("confluence-table").count()) <= 1);
+    await page.fill('[data-testid="cf-search"]', "");
+    const snapBefore = await page.textContent('[data-testid="cf-snapshot"]');
+    await page.click('[data-testid="cf-recompute"]');
+    await page.waitForFunction((b) => document.querySelector('[data-testid="cf-snapshot"]')?.textContent !== b, snapBefore, { timeout: 15000 }).catch(() => null);
+    check("Recompute builds a new snapshot from the stored evidence", (await page.textContent('[data-testid="cf-snapshot"]')) !== snapBefore);
 
     console.log("Fresh 10-day breakouts");
     await page.click('[data-testid="nav-fresh-breakouts"]');

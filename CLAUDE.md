@@ -2,13 +2,13 @@
 
 Project memory for Claude Code sessions in this repository. It describes what the project is, how to run and verify it, what you must never break, where the project stands, and what comes next.
 
-Last updated: 2026-11-04.
+Last updated: 2026-11-05.
 
 ## What this is
 
 This is a personal market-analysis app for NSE stocks (NIFTY 500 plus F&O). It has two parts:
 
-- A **FastAPI backend** finds chart patterns with deterministic numeric rules, then computes indicators, index rotation (RRG) and the user's own Stage Analysis setup.
+- A **FastAPI backend** finds chart patterns with deterministic numeric rules, then computes indicators, index rotation (RRG), the user's own Stage Analysis setup and the advanced scanners (fresh 10-day breakouts, Volume Shocker, 52-week breakouts, VCP), stores every result as normalized evidence and scores stocks on a Confluence Dashboard.
 - A **React frontend** draws the backend's exact geometry on interactive TradingView-style charts.
 
 The user mainly uses the frontend to review charts.
@@ -21,6 +21,7 @@ It is **not** a trading system or a signal service. A pattern's *quality* score 
 |---|---|
 | `master_prompt.txt` | Original spec, phases P1 to P3: patterns, lifecycle, geometry, tracking, evaluation |
 | `enhancement_prompt.txt` | Second spec, E1 to E3: indicators, Marubozu, breakouts, chart terminal, indices, RRG, Stage Analysis |
+| `docs/advanced-features-audit.md` | Third spec (advanced breakout, VCP, confluence, charting; called A1 to A4 here): audit, decisions, schema changes |
 | `stage_analysis.txt`, `rs_line.txt` | The user's own Stage Analysis rules and RS Line Pine Script. Translate them literally. |
 | `docs/*.md` | Rules and decisions (see the index at the end) |
 
@@ -67,29 +68,34 @@ What the first start of a fresh clone does:
   - `api/`: HTTP endpoints.
   - `evaluation/`: labels and precision/recall.
   - `analytics/`: support/resistance zones and outcomes.
+  - `signals/`: shared crossing engine, fresh 10-day + 52-week breakouts, Volume Shocker, normalized evidence (`evidence.py`), NSE 52-week reference.
+  - `vcp/`: VCP detector. `confluence/`: confluence score + snapshots. `drawings.py`: chart drawings in the DB. `data/periods.py`: 1/3/6/12-month candles.
+  - `scripts/synthetic_demo.py`: offline demo server with SYNTHETIC data (for UI checks without network).
 - **Frontend:** React 18, Vite 5 (strictPort 5191, `/api` proxied to 8031), Tailwind v3, Lightweight Charts v5, TypeScript.
   - `src/charts/PatternChart.tsx` is the chart component.
   - `src/charts/debug.ts` exposes `window.__pasChart` for UI checks.
-  - Pages are in `src/pages/`.
+  - Pages are in `src/pages/`. `components/StockChartPreview.tsx` is the preview drawer every table opens (`lib/openChart.tsx`); `lib/drawingStore.ts` syncs drawings with the DB.
 - **Data:**
   - Candles are cached as CSV in `backend/cache/ohlcv/<interval>/<SYMBOL>.csv`.
   - Metadata is in the `market_data` table.
   - Committed snapshots are in `backend/data/`: `nse_holidays.json` (tests need it), `nifty500.csv`, `nse_fno.csv`, `index_intraday_candidates.json`.
 
-## Current status (2026-11-04)
+## Current status (2026-11-05)
 
 | Area | State |
 |---|---|
 | P1 to P3 | Done. 17 patterns, S/R zones, lifecycle, cross-scan tracks, outcomes, labelling, evaluation, compare, sweep, exports. |
 | E1 to E3 | Done. Raw price basis, EMA/RSI/ATR, divergence, Marubozu, 10-day breakouts, chart terminal with drawing tools, NSE index registry, Index Analysis, RRG, Stage Analysis and RS Line. |
+| A1 to A4 | Done (branch `claude/amazing-ritchie-oev49s`, merged to main). A1 fresh/first-time 10-day breakouts, Volume Shocker, 52-week breakouts, `signal_evidence`. A2 VCP detector + scanner. A3 chart preview drawer, fullscreen, 1/3/6/12-month candles, performance horizons, Fibonacci retracement/extension, drawings in the DB. A4 Confluence Dashboard. Built and UI-verified on **synthetic** data only (the cloud session had no Yahoo/NSE access); not yet run on a live scan. |
 | DetectionConfig | **1.3.0**, hash `9c33f4bf86016487`. Tuned by chart review for H&S, doubles, flags and wedges; see `docs/pattern-tuning-1.3.0.md`. |
 | StageConfig | **1.3.0**. Implements the user's confluence entry setup. **Do not change.** |
 | TechnicalConfig / IndexConfig | 1.0.0 / 1.0.0 |
-| DB schema | 7. Migration 7 added `market_data.history_period`. |
+| SignalConfig / VCPConfig / ConfluenceConfig | 1.0.0 `803155cbb7249f12` / 1.0.0 `819cd0e5d2a261bc` / 1.0.0 `b1b29d836e9d6c12`. Engineering defaults (ASSUMPTION-flagged), not validated. Same governance as DetectionConfig (`KNOWN_*_HASHES`, `*_PARAM_META`). |
+| DB schema | 8. Migration 8 added `signal_evidence`, `vcp_formations`, `vcp_contractions`, `confluence_runs`, `confluence_snapshots`, `chart_drawings`, `chart_drawing_history`, `drawing_templates`, `nse_52w_reference` and signal/VCP config columns on `scans`. |
 | Data depth | Stocks 1D/1W: full Yahoo history (from 1996 or listing). 1H: Yahoo's ~730-day cap, and the local cache keeps growing. NSE indices: back to their start (NIFTY 50 from 1990). |
 | Charts | Send the whole history. Open on the latest bars or the selected formation. **Fit** shows everything; **Log** switches to a log price scale. |
-| Tests | pytest 363, `python -m app.selftest` 107, UI suites: verify-ui 28, e1 38, e2 25, e3 14. All pass. |
-| Live 1D scan | 500 of 502 symbols, 334 detections. BAGMANE and DUMMYHEG have no Yahoo data; that is expected. |
+| Tests | pytest 499, `python -m app.selftest` 117, `npm test` 10 (Fibonacci maths), verify-advanced 53 (+3 with `--after-restart`). Older UI suites need the live DB (see "How to verify"). |
+| Live 1D scan | 500 of 502 symbols, 334 detections (before A1-A4). BAGMANE and DUMMYHEG have no Yahoo data; that is expected. The first live scan after A1-A4 adds evidence, VCPs and the confluence snapshot without re-downloading history. |
 
 ## Hard rules: do not break
 
@@ -110,6 +116,9 @@ What the first start of a fresh clone does:
 7. **The frontend never re-detects.** It renders backend geometry. Every geometry point carries `t` (bar start, Unix seconds) and `i` (bar index). The chart API realigns stored geometry by timestamp.
 8. **Tests stay offline.** They use the fixture provider and `FakeHistory`, never the network or the real DB.
 9. **Longer history must not change detections.** This was verified: 334 detections were identical before and after the full-history backfill.
+10. **One detector per signal.** Scanners publish their results as `signal_evidence` rows (`signals/evidence.py` adapters only re-label). The Confluence engine and dashboards read evidence; they never detect.
+11. **Drawings are user data.** They are removed only by the user's delete action; imports never overwrite a newer copy; migrations never drop them.
+12. **SignalConfig / VCPConfig / ConfluenceConfig** follow rule 2 (version bump, `KNOWN_*_HASHES`, `*_PARAM_META`, docs). A changed hash makes the scheduler rescan.
 
 ## How to verify changes
 
@@ -118,12 +127,17 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest              # offline, ~2 min
 .\.venv\Scripts\python.exe -m app.selftest
 cd ..\frontend
-npx tsc --noEmit -p .; npm run build
+npx tsc --noEmit -p .; npm run build; npm test
 node scripts/verify-ui.mjs <dir>   # needs both servers + a completed 1D scan
 node scripts/verify-e1.mjs <dir>   # E1; needs 1D + 1H scans
 node scripts/verify-e2.mjs <dir>   # indices / RRG
 node scripts/verify-e3.mjs <dir>   # Stage page; needs a 1W scan
+node scripts/verify-advanced.mjs <dir>   # A1-A4; needs 1D + 1W scans; writes and removes test drawings
+node scripts/verify-advanced.mjs <dir> --after-restart   # after restarting the backend: drawings survived
 ```
+
+- Without network access (cloud sessions): `backend\.venv\Scripts\python.exe scripts\synthetic_demo.py --port 8031 --data-dir <dir>` serves SYNTHETIC data with 1W/1D/1H scans, and `npm run build; npx vite preview --port 5191 --strictPort` serves the UI. verify-advanced passes there (53/53, restart 3/3); the older suites expect live data: on the demo verify-ui 27/28, e1 36/37 (`E1_SYMBOL=RWALK E1_MIN_UNIVERSE=5`), e2 21/25, e3 12/14 - every miss is a data gap (no bullish flag, 11 vs 139 indices, no intraday index mapping, no RS divergence).
+- Browser for the UI scripts: Edge/Chrome channel, or `PW_EXECUTABLE=/path/to/chromium`.
 
 - `verify-p3.mjs` **writes labels and evaluation runs into the live DB**. Don't run it casually; if you do, delete its test labels afterwards.
 - For anything that affects charts, take screenshots with `playwright-core` (`channel: "msedge"`) and actually look at them. The user expects visual confirmation, not just passing tests.
@@ -141,6 +155,7 @@ node scripts/verify-e3.mjs <dir>   # Stage page; needs a 1W scan
   - The 09:15 hourly bar has zero volume, which is stored as missing.
   - Pre-2006 daily data has stale flat prints; the cleaner drops them (>20% jump, zero volume, no range).
 - The scheduler runs scans only when a new completed candle exists. Index refresh runs weekdays at 16:15 IST.
+- Claude Code cloud sessions: the default network policy blocks `query1.finance.yahoo.com` and `www.nseindia.com` / `nsearchives.nseindia.com`; use the synthetic demo or allow those hosts in the environment's network settings.
 
 ## Next work (candidates; confirm priorities with the user)
 
@@ -154,6 +169,9 @@ node scripts/verify-e3.mjs <dir>   # Stage page; needs a 1W scan
 5. **Hourly history beyond ~730 days** needs a paid or broker data source (for example a broker historical-data API). The provider interface is `providers/base.py`.
 6. **Chart payload is 1 to 2 MB** per full-history chart, with a ~4 to 6 s load. If it feels slow, add gzip or lazy-load older candles.
 7. Tracks start with P3 and have no back-fill of earlier scans.
+8. **Run the first live 1D + 1W scans with A1-A4** and look at the new scanners, the VCP overlay and the Confluence Dashboard on real charts (all A1-A4 UI checks so far ran on synthetic data).
+9. **Validate VCP on labelled real charts** (thresholds are Minervini principles + engineering defaults; `docs/vcp-methodology.md`).
+10. **Confluence weights, bands, strength mappings and freshness windows are placeholders**; calibrate after labelled outcomes exist (`docs/confluence-engine.md`).
 
 ## Docs index
 
@@ -166,3 +184,8 @@ node scripts/verify-e3.mjs <dir>   # Stage page; needs a 1W scan
 - `docs/indicators.md`, `docs/marubozu-breakout.md`, `docs/charting-tools.md`: E1.
 - `docs/index-universe.md`, `docs/rrg.md`: E2.
 - `docs/stage-analysis-implementation.md`: E3.
+- `docs/advanced-features-audit.md`: A1-A4 audit and decisions.
+- `docs/first-time-breakout.md`, `docs/volume-shocker.md`, `docs/52-week-breakouts.md`: A1.
+- `docs/vcp-methodology.md`: A2.
+- `docs/chart-preview.md`, `docs/multi-month-timeframes.md`, `docs/fibonacci-tools.md`, `docs/chart-drawing-persistence.md`: A3.
+- `docs/confluence-engine.md`: A4.

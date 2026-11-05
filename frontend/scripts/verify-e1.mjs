@@ -7,6 +7,9 @@ import { join } from "node:path";
 
 const outDir = process.argv[2] || "ui-screenshots";
 const base = process.argv[3] || "http://127.0.0.1:5191";
+// Live-data defaults; override for other data sets (e.g. the synthetic demo: E1_SYMBOL=RWALK E1_MIN_UNIVERSE=5).
+const SYM = process.env.E1_SYMBOL || "ITC";
+const MIN_UNIVERSE = Number(process.env.E1_MIN_UNIVERSE || 300);
 mkdirSync(outDir, { recursive: true });
 const results = [];
 const check = (name, ok, detail = "") => {
@@ -87,16 +90,16 @@ try {
   await page.waitForFunction((n) => Number(document.querySelector('[data-testid="result-count"]').textContent.split(" ")[0]) !== n, indAll, { timeout: 10000 }).catch(() => null);
   const indBull = await count();
   const rowsTxt = await page.locator('[data-testid="indicator-table-row"]').allTextContents();
-  check("indicator scanner filters EMA alignment", indAll > 300 && indBull < indAll && rowsTxt.every((t) => t.includes("Bullish full")), `${indAll} symbols -> ${indBull} bullish full`);
+  check("indicator scanner filters EMA alignment", indAll >= MIN_UNIVERSE && indBull < indAll && rowsTxt.every((t) => t.includes("Bullish full")), `${indAll} symbols -> ${indBull} bullish full`);
   await page.screenshot({ path: join(outDir, "e1-indicator-scanner.png") });
 
   console.log("Symbol search");
-  await page.fill('[data-testid="symbol-search"]', "ITC");
+  await page.fill('[data-testid="symbol-search"]', SYM);
   await page.waitForSelector('[data-testid="symbol-results"] button');
   await page.keyboard.press("Enter");
-  await page.waitForURL(/\/explorer\/ITC/);
+  await page.waitForURL(new RegExp(`/explorer/${SYM}`));
   await waitDbg(() => window.__pasChart && window.__pasChart.candles > 100);
-  check("symbol search opens the chart", (await page.textContent('[data-testid="explorer-symbol"]')) === "ITC");
+  check("symbol search opens the chart", (await page.textContent('[data-testid="explorer-symbol"]')) === SYM);
 
   console.log("Indicators on the chart");
   check("clean defaults: no EMA, RSI or ATR", (await dbg()).emaSeries.length === 0 && !(await dbg()).rsiPane && !(await dbg()).atrPane);
@@ -104,8 +107,8 @@ try {
   await waitDbg(() => window.__pasChart.emaSeries.length === 3);
   let d = await dbg();
   check("multiple EMA overlays", JSON.stringify(d.emaSeries) === "[20,50,200]", JSON.stringify(d.emaSeries));
-  const chartData = await api(`/api/chart?symbol=ITC&timeframe=1d`);
-  const ind = await api(`/api/indicators?symbol=ITC&timeframe=1d&start_t=${chartData.candles[0].t}${chartData.scan_id ? `&scan_id=${chartData.scan_id}` : ""}`);
+  const chartData = await api(`/api/chart?symbol=${SYM}&timeframe=1d`);
+  const ind = await api(`/api/indicators?symbol=${SYM}&timeframe=1d&start_t=${chartData.candles[0].t}${chartData.scan_id ? `&scan_id=${chartData.scan_id}` : ""}`);
   const legend = await page.textContent('[data-testid="indicator-legend"]');
   const want = Number(ind.latest.ema["50"]).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   check("chart EMA values equal backend values", legend.includes(`EMA50 ${want}`) || legend.includes(`EMA50 ${Number(ind.latest.ema["50"]).toFixed(2)}`), `legend "${legend}" vs backend EMA50 ${ind.latest.ema["50"]}`);
@@ -177,7 +180,7 @@ try {
 
   console.log("Drawing tools");
   await page.evaluate(() => localStorage.removeItem("pas.chartPrefs.v1")); // default panes: candles + volume
-  await page.goto(`${base}/explorer/${process.env.E1_DRAW_SYMBOL || "ITC"}?tf=1d`, { waitUntil: "networkidle" });
+  await page.goto(`${base}/explorer/${process.env.E1_DRAW_SYMBOL || SYM}?tf=1d`, { waitUntil: "networkidle" });
   await waitDbg(() => window.__pasChart.candles > 100);
   let box = await chartBox();
   const at = (fx, fy) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy });

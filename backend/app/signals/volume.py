@@ -94,6 +94,21 @@ def classify_direction(o: float, h: float, l: float, c: float, cfg: SignalConfig
     return "neutral", body, loc
 
 
+def latest_volume_state(frame: pd.DataFrame, timeframe: str, cfg: SignalConfig) -> dict[str, Any]:
+    """Relative volume of the latest completed candle, whatever its size (``missing``
+    when the candle or its reference has no known volume) - lets later consumers
+    tell "no unusual volume" from "volume unknown"."""
+    v = frame["volume"].to_numpy(dtype=float)
+    n = len(v)
+    if n == 0:
+        return {"status": "missing", "rvol": None}
+    refs = References(frame.index, timeframe)
+    ref = _window(v, refs.last(n - 1, cfg.vs_lookback), cfg.vs_lookback, cfg.vs_min_valid_frac)
+    if not np.isfinite(v[-1]) or ref is None or ref.mean() <= 0:
+        return {"status": "missing", "rvol": None, "time": iso(frame.index[-1]), "t": epoch_s(frame.index[-1])}
+    return {"status": "ok", "rvol": _r(v[-1] / ref.mean(), 3), "volume": float(v[-1]), "avg_volume": _r(float(ref.mean()), 1), "time": iso(frame.index[-1]), "t": epoch_s(frame.index[-1])}
+
+
 def volume_shocks(
     frame: pd.DataFrame,
     timeframe: str,

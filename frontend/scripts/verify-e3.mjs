@@ -58,17 +58,22 @@ try {
   await page.waitForTimeout(800);
   const rsRows = (await api("/api/stage?universe=nifty500&stage=stage1&rs=above_zero")).items;
   check("filter by RS condition", rsRows.every((r) => r.metrics.rs_zero_line === "above") && (await page.locator('[data-testid="stage-table-row"]').count()) === rsRows.length, `${rsRows.length} rows`);
+  if (!rsRows.length) {
+    // small data sets (e.g. the synthetic demo): no Stage 1 stock with RS above zero - show all to continue
+    await page.selectOption('[data-testid="stage-rs"]', "");
+    await page.waitForTimeout(800);
+  }
   await page.locator('[data-testid="stage-table-row"]').first().click();
   await page.waitForSelector('[data-testid="stage-detail"]');
   const det = await page.textContent('[data-testid="stage-detail"]');
   check("explanation with gate results", /PASS/.test(det) && /FAIL/.test(det) && det.includes("Base Range") && det.includes("Testing Ema"), det.slice(0, 80));
   check("assumptions visibly flagged", (await page.locator('[data-testid="stage-detail"] [data-testid="assumption-tag"]').count()) >= 1 && (await page.locator('[data-testid="stage-assumptions"] li').count()) >= 5);
   await page.screenshot({ path: join(outDir, "e3-stage-page.png") });
-  const sym = rsRows[0]?.symbol;
   await page.click('[data-testid="stage-open-chart"]');
   await page.waitForSelector('[data-testid="chart-preview"]');
   await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/tf=1w&show=stage,rs/);
+  const sym = decodeURIComponent(new URL(page.url()).pathname.split("/").pop()); // the stock whose chart was opened
   await waitDbg(() => window.__pasChart && window.__pasChart.timeframe === "1w" && window.__pasChart.rsLinePane && window.__pasChart.overlayLines === 1);
   const d = await dbg();
   check("weekly chart with Stage overlays (30W EMA, base lines) and RS Line pane", d.rsLinePane && d.overlayLines === 1 && d.rsLinePoints > 50, `${sym}: RS points ${d.rsLinePoints}, panes ${d.panes}`);

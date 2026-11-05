@@ -40,7 +40,8 @@ export function explorerUrl(req: ChartRequest): string {
   if (req.patternId) qs.set("pattern_id", req.patternId);
   if (req.asof) qs.set("asof", req.asof);
   if (req.show?.length) qs.set("show", req.show.join(","));
-  return req.instrument === "index" ? `/index/${encodeURIComponent(req.symbol)}?${qs.toString()}` : `/explorer/${encodeURIComponent(req.symbol)}?${qs.toString()}`;
+  const q = qs.toString().replace(/%2C/gi, ","); // "show=levels,breakouts" as before (commas are valid in a query)
+  return req.instrument === "index" ? `/index/${encodeURIComponent(req.symbol)}?${q}` : `/explorer/${encodeURIComponent(req.symbol)}?${q}`;
 }
 
 /** Opens the shared chart preview (or, without a provider, the full chart page). */

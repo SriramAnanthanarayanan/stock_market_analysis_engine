@@ -313,6 +313,119 @@ export const vcpApi = {
   symbol: (symbol: string, asof?: string | null) => request<VcpSymbol>(`/api/vcp/symbol${qs({ symbol, asof })}`),
 };
 
+// ---------------------------------------------------------------- confluence (P4)
+export type ConfluenceCategoryKey = "trend" | "setup" | "trigger" | "volume_candle" | "relative_strength";
+export type EvidenceUse = "used" | "bonus" | "overlapping" | "expired" | "invalidated";
+
+export interface ConfluenceEvidence {
+  evidence_id: string;
+  source: string;
+  label: string;
+  strength: number;
+  family: string;
+  status: EvidenceUse;
+  note: string;
+  time: string | null;
+}
+
+export interface ConfluenceCategory {
+  key: ConfluenceCategoryKey;
+  label: string;
+  weight: number;
+  available: boolean;
+  score: number;
+  /** Score points this category contributes (null when its data is unavailable). */
+  points: number | null;
+  rule: string;
+  evidence: ConfluenceEvidence[];
+  parts?: Record<string, number>;
+}
+
+export interface ConfluenceSummary {
+  vcp_status: string | null;
+  vcp_label: string | null;
+  fresh_breakout: { age: number; first_in_lookback: boolean | null; level: number | null } | null;
+  week52: { age: number; level: number | null } | null;
+  marubozu: { age: number } | null;
+  volume_shock: { age: number; rvol: number; direction: Direction } | null;
+  pattern: { name: string | null; status: string; quality: number | null } | null;
+  ema_alignment: string | null;
+  stage: string | null;
+  stage_label: string | null;
+  rs: number | null;
+  rs_trend: string | null;
+  rrg_quadrant: string | null;
+  latest_signal_time: string | null;
+  close: number | null;
+}
+
+export interface ConfluenceCombo {
+  type: "breakout_marubozu_volume" | "breakout_volume" | "breakout_marubozu" | null;
+  points: number;
+  session: string | null;
+}
+
+export interface ConfluenceRow extends StockRef {
+  snapshot_id: string;
+  direction: "bullish" | "bearish";
+  timeframe: "1d" | "1w";
+  close: number | null;
+  score: number;
+  base_score: number;
+  bonus: number;
+  band: string;
+  coverage: number;
+  ranked: boolean;
+  active_signals: number;
+  latest_signal_time: string | null;
+  summary: ConfluenceSummary;
+  explanation: ConfluenceCategory[];
+  combo: ConfluenceCombo | null;
+}
+
+export interface ConfluenceSnapshot {
+  snapshot_id: string;
+  created_at: string;
+  timeframe: "1d" | "1w";
+  asof: string | null;
+  primary_scan_id: string;
+  context_scan_id: string | null;
+  config_version: string;
+  config_hash: string;
+  counts: Record<string, number>;
+}
+
+export interface ConfluenceResult {
+  snapshot: ConfluenceSnapshot | null;
+  scan?: AdvScanSummary | null;
+  context_scan?: AdvScanSummary | null;
+  direction?: "bullish" | "bearish";
+  screen?: string | null;
+  count: number;
+  items: ConfluenceRow[];
+  bands?: Record<string, number>;
+  weights?: Record<ConfluenceCategoryKey, number>;
+  min_coverage?: number;
+  category_labels?: Record<ConfluenceCategoryKey, string>;
+  note: string;
+}
+
+export interface ConfluenceScreen {
+  key: string;
+  label: string;
+  direction: "bullish" | "bearish";
+  description: string;
+}
+
+export const confluenceApi = {
+  list: (q: Q) => request<ConfluenceResult>(`/api/confluence${qs(q)}`),
+  symbol: (symbol: string, timeframe: "1d" | "1w" = "1d", asof?: string | null) =>
+    request<{ symbol: string; snapshot: ConfluenceSnapshot; bullish: ConfluenceRow | null; bearish: ConfluenceRow | null; note: string }>(`/api/confluence/symbol${qs({ symbol, timeframe, asof })}`),
+  refresh: (body: { universe: Universe; timeframe: "1d" | "1w"; asof: string | null }) =>
+    request<{ snapshot: ConfluenceSnapshot }>(`/api/confluence/refresh`, { method: "POST", body: JSON.stringify(body) }),
+  screens: () => request<{ items: ConfluenceScreen[] }>(`/api/confluence/screens`),
+};
+
 // ---------------------------------------------------------------- chart drawings (P3)
 import type { Drawing, DrawingType } from "../charts/drawings";
 

@@ -288,6 +288,11 @@ class ScanManager:
             detection_count=n_det,
             message=data_msg,
         )
+        # Confluence snapshot of the new evidence (persisted; the dashboard never re-runs scanners).
+        if req.timeframe in ("1d", "1w"):
+            from .confluence.service import refresh_after_scan
+
+            refresh_after_scan(s, req.universe, req.timeframe, req.asof)
 
     def _store_symbol(self, scan_id: str, st: StockInfo, status: str, err: str | None, bars: int, last_ts: str | None, note: str | None) -> None:
         with self.s.engine.begin() as conn:
@@ -423,6 +428,7 @@ class ScanManager:
             pub.week52(outs.w52_events, outs.w52_touches, outs.w52_state, sv, sh)
             self._store_vcp(scan_id, st, frame, ser, pub)
         pub.volume_shocks(outs.shocks, sv, sh)
+        pub.volume_state(outs.volume_state, sv, sh)
         if tech is not None:
             tv, th = s.tech_cfg.version, config_hash(s.tech_cfg)
             pub.marubozu(tech.signals, tv, th)

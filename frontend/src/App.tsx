@@ -4,6 +4,7 @@ import { SymbolSearch } from "./components/SymbolSearch";
 import { ChartPreviewHost } from "./components/StockChartPreview";
 import { BreakoutScanner } from "./pages/BreakoutScanner";
 import { CandlestickScanner } from "./pages/CandlestickScanner";
+import { ConfluenceDashboard } from "./pages/ConfluenceDashboard";
 import { Dashboard } from "./pages/Dashboard";
 import { Evaluation } from "./pages/Evaluation";
 import { Explorer } from "./pages/Explorer";
@@ -19,6 +20,7 @@ import { RRG } from "./pages/RRG";
 import { StageAnalysis } from "./pages/StageAnalysis";
 
 const NAV: { to: string; label: string; testid: string; end?: boolean; group?: string }[] = [
+  { to: "/confluence", label: "Confluence Dashboard", testid: "nav-confluence", group: "Confluence" },
   { to: "/", label: "Pattern Scanner", testid: "nav-scanner", end: true, group: "Scanners" },
   { to: "/candlesticks", label: "Candlestick Scanner", testid: "nav-candlesticks" },
   { to: "/fresh-breakouts", label: "Fresh Breakouts", testid: "nav-fresh-breakouts" },
@@ -74,6 +76,7 @@ export default function App() {
             <Route path="/52-week" element={<Week52Scanner />} />
             <Route path="/volume-shocker" element={<VolumeShocker />} />
             <Route path="/vcp" element={<VcpScanner />} />
+            <Route path="/confluence" element={<ConfluenceDashboard />} />
             <Route path="/indicators" element={<IndicatorScanner />} />
             <Route path="/rrg" element={<RRG />} />
             <Route path="/stage" element={<StageAnalysis />} />

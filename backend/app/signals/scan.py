@@ -10,7 +10,7 @@ import pandas as pd
 
 from ..config import SignalConfig, config_hash
 from .breakouts import crossing_events, fresh_kind, fresh_params, touch_records, w52_kind, w52_params, week52_state
-from .volume import volume_shocks
+from .volume import latest_volume_state, volume_shocks
 
 
 @dataclass
@@ -21,6 +21,7 @@ class SignalOutputs:
     w52_touches: list[dict[str, Any]] = field(default_factory=list)
     w52_state: dict[str, Any] = field(default_factory=dict)
     shocks: list[dict[str, Any]] = field(default_factory=list)
+    volume_state: dict[str, Any] = field(default_factory=dict)
 
 
 def run_signals(frame: pd.DataFrame, timeframe: str, atr: np.ndarray, ema20: np.ndarray | None, ema50: np.ndarray | None, cfg: SignalConfig, symbol: str) -> SignalOutputs:
@@ -45,4 +46,5 @@ def run_signals(frame: pd.DataFrame, timeframe: str, atr: np.ndarray, ema20: np.
         out.w52_touches = touch_records(frame, w52walks, w52_kind, since=n - cfg.touch_store_sessions)
         out.w52_state = week52_state(frame, atr, cfg, w52walks)
     out.shocks = volume_shocks(frame, timeframe, atr, ema20, ema50, cfg, since=n - cfg.vs_store_bars)
+    out.volume_state = latest_volume_state(frame, timeframe, cfg)
     return out

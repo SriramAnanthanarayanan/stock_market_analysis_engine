@@ -19,6 +19,8 @@ interface Props {
   subtitle: string;
   universe: Universe;
   timeframe: Timeframe | null; // null = fixed (breakouts are always daily)
+  /** Selectable timeframes (default: every scan timeframe). */
+  timeframes?: { value: Timeframe; label: string }[];
   asof: string;
   onChange: (patch: { universe?: Universe; timeframe?: Timeframe; asof?: string }) => void;
   scan: HeaderScan | null;
@@ -75,7 +77,7 @@ export function TechScanHeader(p: Props) {
           <div className="flex flex-col gap-1">
             <span className="label">Timeframe</span>
             <div className="flex gap-1">
-              {TIMEFRAMES.map((t) => (
+              {(p.timeframes ?? TIMEFRAMES).map((t) => (
                 <button key={t.value} className={`chip h-8 ${t.value === p.timeframe ? "chip-on" : ""}`} onClick={() => p.onChange({ timeframe: t.value })} data-testid={`tf-${t.value}`}>
                   {t.label}
                 </button>
