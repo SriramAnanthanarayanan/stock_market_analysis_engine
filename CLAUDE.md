@@ -89,7 +89,7 @@ What the first start of a fresh clone does:
 | P1 to P3 | Done. 17 patterns, S/R zones, lifecycle, cross-scan tracks, outcomes, labelling, evaluation, compare, sweep, exports. |
 | E1 to E3 | Done. Raw price basis, EMA/RSI/ATR, divergence, Marubozu, 10-day breakouts, chart terminal with drawing tools, NSE index registry, Index Analysis, RRG, Stage Analysis and RS Line. |
 | A1 to A4 | Done (merged to main). A1 fresh/first-time 10-day breakouts, Volume Shocker, 52-week breakouts, `signal_evidence`. A2 VCP detector + scanner. A3 chart preview drawer, fullscreen, 1/3/6/12-month candles, performance horizons, Fibonacci retracement/extension, drawings in the DB. A4 Confluence Dashboard. Built and UI-verified on **synthetic** data only (the cloud session had no Yahoo/NSE access); not yet run on a live scan. |
-| A5 | Done on branch `claude/amazing-ritchie-oev49s` (not merged to main yet). Candlestick / line chart switch; running (incomplete) 1W / multi-month candle (`is_complete`, grey, never used by detectors, indicators optional); VCP detector v2 (successive contractions, 7 states, 6-part score, structure overlay); IPO Base Breakout scanner (official NSE listing dates); 10-day About to Break Out states; confluence 1.1 (setups, IPO base, dry-up, Marubozu + volume, sector strength, 11 screens); drawings per user (`X-PAS-User`) + creating timeframe + text notes; universal preview from every scanner. Built and UI-verified on **synthetic** data only. |
+| A5 | Done (merged to main). Candlestick / line chart switch; running (incomplete) 1W / multi-month candle (`is_complete`, grey, never used by detectors, indicators optional); VCP detector v2 (successive contractions, 7 states, 6-part score, structure overlay); IPO Base Breakout scanner (official NSE listing dates); 10-day About to Break Out states; confluence 1.1 (setups, IPO base, dry-up, Marubozu + volume, sector strength, 11 screens); drawings per user (`X-PAS-User`) + creating timeframe + text notes; universal preview from every scanner. Built and UI-verified on **synthetic** data only. |
 | DetectionConfig | **1.3.0**, hash `9c33f4bf86016487`. Tuned by chart review for H&S, doubles, flags and wedges; see `docs/pattern-tuning-1.3.0.md`. |
 | StageConfig | **1.3.0**. Implements the user's confluence entry setup. **Do not change.** |
 | TechnicalConfig / IndexConfig | 1.0.0 / 1.0.0 |
@@ -177,7 +177,6 @@ node scripts/verify-improvements.mjs <dir> --after-restart
 8. **Run the first live 1D + 1W scans with A1-A5** and look at the new scanners, the VCP v2 structure, IPO bases, About to Break Out and the Confluence Dashboard on real charts (all A1-A5 UI checks so far ran on synthetic data). The first live universe refresh also loads the NSE listing dates (EQUITY_L) the IPO base scanner needs.
 9. **Validate VCP v2 and the IPO base on labelled real charts** (thresholds are Minervini / O'Neil principles + engineering defaults; `docs/vcp-methodology.md`, `docs/ipo-base.md`). No accuracy may be claimed before that.
 10. **Confluence weights, bands, strength mappings and freshness windows are placeholders**; calibrate after labelled outcomes exist (`docs/confluence-engine.md`). The industry -> sector index map is an ASSUMPTION.
-11. **Merge A5 to main** once the user has reviewed the branch.
 
 ## Docs index
 
