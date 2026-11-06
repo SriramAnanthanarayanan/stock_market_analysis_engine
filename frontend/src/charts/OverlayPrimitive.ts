@@ -45,6 +45,8 @@ export interface PointShape {
   color: string;
   radius: number;
   label?: string;
+  /** Draw the label under the point (swing lows) instead of above it. */
+  labelBelow?: boolean;
 }
 export interface SegmentShape {
   kind: "segment";
@@ -176,7 +178,7 @@ class TopRenderer implements IPrimitivePaneRenderer {
         ctx.stroke();
         if (s.label) {
           ctx.fillStyle = s.color;
-          ctx.fillText(s.label, x + s.radius + 4, y - s.radius - 2);
+          ctx.fillText(s.label, x + s.radius + 4, s.labelBelow ? y + s.radius + 12 : y - s.radius - 2);
         }
       }
     });

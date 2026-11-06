@@ -460,23 +460,49 @@ def advanced_checks(r: Runner, cal: NSECalendar) -> None:
         st = week52_state(f, a, S, walks)
         return st["status"] == "insufficient_history" and not ev, f"{st['status']}, {len(ev)} events with 199 previous sessions"
 
-    def vcp(spec, want):
+    def vcp(spec, want, flag=None):
         def run():
             r = detect_vcp(vcp_frame(spec, cal), V, symbol="S")
             got = r["status"] if r else None
-            return got in want, f"status {got}, depths {r['depths_pct'] if r else '-'}, quality {r['quality'] if r else '-'}"
+            ok = got in want and (flag is None or bool(r and r.get(flag)))
+            return ok, f"status {got}, depths {r['depths_pct'] if r else '-'}, quality {r['quality'] if r else '-'}"
         return run
 
     r.check("adv", "fresh 10-day breakout: one event per episode", fb_pos)
     r.check("adv", "fresh breakout re-armed after 3 closes inside", fb_rearm)
     r.check("adv", "volume shock: 2x the previous 20 candles", vs_2x)
     r.check("adv", "52-week: < 252 sessions -> insufficient history", w52_insufficient)
-    r.check("adv", "VCP: 3 contractions near the pivot", vcp(VCPSpec(), {"near_pivot", "tightening"}))
+    r.check("adv", "VCP: 3 contractions near the pivot", vcp(VCPSpec(), {"near_pivot", "final_contraction"}))
     r.check("adv", "VCP: non-contracting base rejected", vcp(VCPSpec(depths=(15, 15, 14)), {None, "invalidated"}))
     r.check("adv", "VCP: rising volume not qualified", vcp(VCPSpec(volumes=(0.5e5, 0.7e5, 1.0e5)), {"forming"}))
     r.check("adv", "VCP: breakout with volume expansion", vcp(VCPSpec(tail=[(1.02, 2.5e5)]), {"breakout"}))
-    r.check("adv", "VCP: pivot cross without volume", vcp(VCPSpec(tail=[(1.02, 0.6e5)]), {"pivot_cross_low_volume"}))
+    r.check("adv", "VCP: pivot cross without volume is not a breakout", vcp(VCPSpec(tail=[(1.02, 0.6e5)]), {"near_pivot"}, "pivot_crossed_low_volume"))
     r.check("adv", "VCP: failed breakout", vcp(VCPSpec(tail=[(1.02, 2.5e5), (0.97, 0.6e5), (0.965, 0.6e5)]), {"failed_breakout"}))
+    four = dict(depths=(28, 15, 8, 4), recover=(0.99, 0.99, 0.99, 0.985), down_bars=(8, 6, 4, 3), up_bars=(8, 6, 5, 4), volumes=(1e5, 0.8e5, 0.6e5, 0.4e5))
+    r.check("adv", "VCP: four successive contractions T1 > T2 > T3 > T4", vcp(VCPSpec(**four), {"near_pivot", "final_contraction"}))
+
+    from .config import DEFAULT_IPO_CONFIG as I
+    from .ipo import detect_ipo_base
+    from .synthetic_ipo import IPOSpec, ipo_frame
+
+    def ipo_bo():
+        f = ipo_frame(IPOSpec(tail=[(125.0, 3.0, 3.0e6)]), cal)
+        x = detect_ipo_base(f, I, f.index[0].date(), calendar=cal)
+        return bool(x and x["status"] == "breakout" and x["breakout"]["volume_ok"]), f"status {x and x['status']}, pivot {x and x['pivot']}"
+
+    def setup_very_near():
+        from .signals.scan import run_signals
+
+        closes = list(90 + 3 * np.sin(np.arange(49) / 3.0)) + [94, 95, 96, 95, 96, 95, 96, 95, 96, 96, 99.4]
+        f = closes_frame(closes, cal, wick=3.0)
+        f.iloc[52, f.columns.get_loc("high")] = 100.0
+        f.iloc[-1, f.columns.get_loc("high")] = 99.6
+        a = atr_wilder(f["high"].to_numpy(), f["low"].to_numpy(), f["close"].to_numpy(), 14)
+        st = [x for x in run_signals(f, "1d", a, None, None, S, "T").setups if x["direction"] == "bullish"]
+        return bool(st and st[0]["state"] == "very_near"), f"{[x['state'] for x in st]}"
+
+    r.check("adv", "IPO base: breakout above the post-listing base on volume", ipo_bo)
+    r.check("adv", "10-day level: Very Near before the breakout", setup_very_near)
 
 
 def main() -> int:

@@ -4,6 +4,8 @@ Code: `backend/app/signals/crossing.py` (crossing engine, shared with the 52-wee
 
 Goal: report a stock once, when it **crosses** its previous 10-session high / low, not every day it stays above it.
 
+The state **before** the crossing (Approaching / Very Near / Touched, then Breakout / Confirmed Breakout / Rejected / Expired) is documented in `docs/about-to-breakout.md`; it uses the same level and crossing engine and does not change this rule.
+
 ## Definitions (completed daily candles; trading sessions, not calendar days)
 
 ```

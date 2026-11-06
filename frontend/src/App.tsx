@@ -5,6 +5,8 @@ import { ChartPreviewHost } from "./components/StockChartPreview";
 import { BreakoutScanner } from "./pages/BreakoutScanner";
 import { CandlestickScanner } from "./pages/CandlestickScanner";
 import { ConfluenceDashboard } from "./pages/ConfluenceDashboard";
+import { AboutToBreakout } from "./pages/AboutToBreakout";
+import { IpoBaseScanner } from "./pages/IpoBaseScanner";
 import { Dashboard } from "./pages/Dashboard";
 import { Evaluation } from "./pages/Evaluation";
 import { Explorer } from "./pages/Explorer";
@@ -24,9 +26,11 @@ const NAV: { to: string; label: string; testid: string; end?: boolean; group?: s
   { to: "/", label: "Pattern Scanner", testid: "nav-scanner", end: true, group: "Scanners" },
   { to: "/candlesticks", label: "Candlestick Scanner", testid: "nav-candlesticks" },
   { to: "/fresh-breakouts", label: "Fresh Breakouts", testid: "nav-fresh-breakouts" },
+  { to: "/about-to-breakout", label: "About to Break Out", testid: "nav-setups" },
   { to: "/52-week", label: "52-Week Breakouts", testid: "nav-52week" },
   { to: "/volume-shocker", label: "Volume Shocker", testid: "nav-volume" },
   { to: "/vcp", label: "VCP Scanner", testid: "nav-vcp" },
+  { to: "/ipo-base", label: "IPO Base Breakout", testid: "nav-ipo" },
   { to: "/breakouts", label: "Breakout Scanner", testid: "nav-breakouts" },
   { to: "/indicators", label: "Indicator Scanner", testid: "nav-indicators" },
   { to: "/rrg", label: "RRG", testid: "nav-rrg", group: "Markets" },
@@ -76,6 +80,8 @@ export default function App() {
             <Route path="/52-week" element={<Week52Scanner />} />
             <Route path="/volume-shocker" element={<VolumeShocker />} />
             <Route path="/vcp" element={<VcpScanner />} />
+            <Route path="/ipo-base" element={<IpoBaseScanner />} />
+            <Route path="/about-to-breakout" element={<AboutToBreakout />} />
             <Route path="/confluence" element={<ConfluenceDashboard />} />
             <Route path="/indicators" element={<IndicatorScanner />} />
             <Route path="/rrg" element={<RRG />} />

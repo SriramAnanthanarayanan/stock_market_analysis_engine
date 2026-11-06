@@ -157,7 +157,7 @@ try {
     }
     check("bearish confluence listed separately", bearRows === 0 || (await page.textContent('[data-testid="cf-detail"]')).includes("(bearish)"), `${bearRows} rows`);
     await page.click('[data-testid="cf-dir-bullish"]');
-    await page.selectOption('[data-testid="cf-vcp"]', "breakout,breakout_pending");
+    await page.selectOption('[data-testid="cf-vcp"]', "breakout");
     await settle();
     const vcpLabels = await page.locator('[data-testid="confluence-table-row"] td:nth-child(9)').allTextContents();
     check("VCP status filter", vcpLabels.every((t) => /breakout/i.test(t)), vcpLabels.join(","));
@@ -303,14 +303,16 @@ try {
     await page.goto(`${base}/explorer/${encodeURIComponent(target)}?tf=1d`, { waitUntil: "networkidle" });
     await chartReady();
     await settle(1200);
-    const before = (await api(`/api/drawings?symbol=${target}`)).body.count;
+    const beforeList = (await api(`/api/drawings?symbol=${target}`)).body.items;
+    const before = beforeList.length;
+    const beforeIds = new Set(beforeList.map((x) => x.drawing_id));
     // Clicks stay in the upper part of the chart: the price pane (sub panes sit below it).
     await page.click('[data-testid="tool-fib_retracement"]');
     await clickChart(0.55, 0.35);
     await clickChart(0.8, 0.08);
     check("Fib retracement created with two clicks", await saved(), "");
     let list = (await api(`/api/drawings?symbol=${target}`)).body.items;
-    const fibR = list.find((x) => x.drawing_type === "fib_retracement" && !list.some((y) => y === x && false));
+    const fibR = list.find((x) => x.drawing_type === "fib_retracement" && !beforeIds.has(x.drawing_id));
     check("saved to the database with 14 default levels", list.length === before + 1 && fibR && fibR.settings.levels.length === 14, `${list.length - before} new`);
     await page.click('[data-testid="draw-settings"]');
     await page.waitForSelector('[data-testid="fib-settings"]');
@@ -339,7 +341,7 @@ try {
     await clickChart(0.52, 0.25);
     await saved();
     list = (await api(`/api/drawings?symbol=${target}`)).body.items;
-    const fibE = list.find((x) => x.drawing_type === "fib_extension" && x.drawing_id !== fibR.drawing_id);
+    const fibE = list.find((x) => x.drawing_type === "fib_extension" && !beforeIds.has(x.drawing_id));
     check("trend-based Fib extension created with three clicks", !!fibE && fibE.anchors.length === 3);
     await page.screenshot({ path: join(outDir, "adv-fib-extension.png") });
     const onDaily = (await dbg()).drawings;
@@ -366,7 +368,8 @@ try {
     await saved(page2);
     await page.waitForFunction((n) => window.__pasChart.drawings === n, onDaily + 1, { timeout: 10000 }).catch(() => null);
     check("a drawing saved in another tab appears here", (await dbg()).drawings === onDaily + 1, `${(await dbg()).drawings}`);
-    const hl = (await api(`/api/drawings?symbol=${target}`)).body.items.find((x) => x.drawing_type === "hline");
+    // the h-line the second tab just drew (never another script's or the user's own h-line)
+    const hl = (await api(`/api/drawings?symbol=${target}`)).body.items.find((x) => x.drawing_type === "hline" && !beforeIds.has(x.drawing_id));
     // the other tab changes the extension (version +1) without this tab knowing
     const cur = (await api(`/api/drawings?symbol=${target}`)).body.items.find((x) => x.drawing_id === fibE.drawing_id);
     const theirs = await page2.evaluate(async (d) => (await fetch(`/api/drawings/${d.drawing_id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...d, color: "#ff00ff", base_version: d.version, version: undefined, created_at: undefined, updated_at: undefined, origin: undefined }) })).status, cur);

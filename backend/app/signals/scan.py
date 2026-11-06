@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import SignalConfig, config_hash
-from .breakouts import crossing_events, fresh_kind, fresh_params, touch_records, w52_kind, w52_params, week52_state
+from .breakouts import breakout_setups, crossing_events, fresh_kind, fresh_params, touch_records, w52_kind, w52_params, week52_state
 from .volume import latest_volume_state, volume_shocks
 
 
@@ -22,6 +22,7 @@ class SignalOutputs:
     w52_state: dict[str, Any] = field(default_factory=dict)
     shocks: list[dict[str, Any]] = field(default_factory=list)
     volume_state: dict[str, Any] = field(default_factory=dict)
+    setups: list[dict[str, Any]] = field(default_factory=list)
 
 
 def run_signals(frame: pd.DataFrame, timeframe: str, atr: np.ndarray, ema20: np.ndarray | None, ema50: np.ndarray | None, cfg: SignalConfig, symbol: str) -> SignalOutputs:
@@ -39,6 +40,7 @@ def run_signals(frame: pd.DataFrame, timeframe: str, atr: np.ndarray, ema20: np.
             since=n - cfg.fresh_store_sessions, volume_lookback=cfg.fresh_volume_lookback, first_lookback=cfg.fresh_first_lookback_sessions,
         )
         out.fresh_touches = touch_records(frame, walks, lambda d: fresh_kind(d, nd), since=n - cfg.touch_store_sessions)
+        out.setups = breakout_setups(frame, atr, ema20, ema50, walks, cfg)
         out.w52_events, w52walks = crossing_events(
             frame, atr, w52_params(cfg), symbol=symbol, kind_of=w52_kind, config_hash=chash,
             since=n - cfg.w52_store_sessions, volume_lookback=cfg.w52_volume_lookback, first_lookback=cfg.fresh_first_lookback_sessions,

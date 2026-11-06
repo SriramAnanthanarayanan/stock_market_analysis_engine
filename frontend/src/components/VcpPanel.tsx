@@ -4,10 +4,8 @@ import { KV, Panel } from "./common";
 
 const STATUS_CLS: Record<string, string> = {
   breakout: "text-up",
-  breakout_pending: "text-up",
   near_pivot: "text-accent",
-  tightening: "text-validated",
-  pivot_cross_low_volume: "text-forming",
+  final_contraction: "text-validated",
   forming: "text-forming",
   developing: "text-developing",
   failed_breakout: "text-invalid",
@@ -47,7 +45,9 @@ export function VcpPanel({ v, stage, compact = false }: { v: VcpRow; stage?: Sta
         <KV k="Final volume / prior 50-day avg" v={fmtNum((m.final_volume_vs_avg50 as number | null) ?? null, 2)} />
         <KV k="Dry-up days in final contraction" v={String(m.dry_up_days_final ?? "-")} />
         <KV k="Preceding advance" v={`${fmtNum((m.prior_advance_pct as number | null) ?? null, 1)}%`} />
-        {v.breakout_time && <KV k="Breakout candle" v={fmtBarTime(v.breakout_time, "1d")} />}
+        {typeof m.footprint === "string" && <KV k="Footprint (base days, T1/final depth, T count)" v={m.footprint} />}
+        {v.breakout_time && <KV k="Breakout candle" v={`${fmtBarTime(v.breakout_time, "1d")}${v.geometry?.breakout?.volume_ratio ? ` · volume ${fmtNum(v.geometry.breakout.volume_ratio, 2)}x 50D` : ""}`} />}
+        {v.pivot_crossed_low_volume && <p className="text-[11px] text-forming" data-testid="vcp-low-volume-cross">Closed above the pivot without breakout volume - not a breakout.</p>}
         <KV k="Stage Analysis (context)" v={<StageChip st={stage ?? v.stage} />} />
         {v.status_reason && <p className="mt-1 text-[11px] text-forming">{v.status_reason}</p>}
         {!compact && cl && cl.length > 0 && (
@@ -58,22 +58,31 @@ export function VcpPanel({ v, stage, compact = false }: { v: VcpRow; stage?: Sta
                 <th className="text-left font-normal">High → low</th>
                 <th className="text-right font-normal">Depth</th>
                 <th className="text-right font-normal">Bars</th>
-                <th className="text-right font-normal">Avg vol</th>
-                <th className="text-right font-normal">vs 50D</th>
+                <th className="text-right font-normal" title="Mean / median volume of the contraction">Avg / med vol</th>
+                <th className="text-right font-normal" title="Mean volume vs the 50 sessions before the contraction">vs 50D</th>
+                <th className="text-right font-normal" title="Mean volume vs the previous contraction">vs prev</th>
+                <th className="text-right font-normal" title="Contraction range in ATR(14) units">ATR</th>
               </tr>
             </thead>
             <tbody>
               {cl.map((c) => (
-                <tr key={c.seq} className="border-t border-line/50">
-                  <td className="py-0.5 text-ink">{c.label}</td>
+                <tr key={c.seq} className={`border-t border-line/50 ${c.final ? "bg-accent/5" : ""}`} data-final={c.final ? "1" : "0"}>
+                  <td className="py-0.5 text-ink">
+                    {c.label}
+                    {c.final ? <span className="ml-1 text-[9px] text-accent">final</span> : null}
+                  </td>
                   <td className="text-muted">
                     {fmtNum(c.start_price)} → {fmtNum(c.end_price)}
                     {c.provisional ? " *" : ""}
                   </td>
                   <td className="num text-right text-ink">{c.depth_pct.toFixed(1)}%</td>
                   <td className="num text-right">{c.bars}</td>
-                  <td className="num text-right">{fmtVolume(c.avg_volume)}</td>
+                  <td className="num text-right">
+                    {fmtVolume(c.avg_volume)} / {fmtVolume(c.median_volume ?? null)}
+                  </td>
                   <td className="num text-right">{fmtNum(c.volume_vs_avg50, 2)}</td>
+                  <td className="num text-right">{fmtNum(c.volume_vs_prev ?? null, 2)}</td>
+                  <td className="num text-right">{fmtNum(c.atr_range ?? null, 1)}</td>
                 </tr>
               ))}
             </tbody>

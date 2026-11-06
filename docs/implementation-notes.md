@@ -134,8 +134,30 @@ Full report with sources, counts and screenshots: `docs/pattern-tuning-1.3.0.md`
 | Long-range viewing | `minBarSpacing` 0.05 px so Fit reaches the first bar (default 0.5 px stopped at ~2,800 bars); Log price-scale toggle. | 30 years on a linear axis flattens early decades. |
 | Stage Analysis | Untouched. Its NIFTY 50 benchmark now also covers 1990-2016, so RS values exist for those older weeks; recent values are unchanged (finite RS lookback). | User constraint: never change the Stage setup. |
 
+## A5 decisions ("Improve Existing Price-Action Screener", schema 9, 2026-11-05)
+
+Source: the user's fourth specification (line chart, running candles, VCP rebuild, IPO base, 10-day about-to-breakout, confluence, universal preview, drawings, tests). Nothing existing was removed; Stage Analysis, DetectionConfig and the 17 pattern detectors are unchanged.
+
+| Topic | Decision | Why |
+|---|---|---|
+| Line chart | Lightweight Charts `LineSeries` of the candles' closes added next to the candlestick series; in line mode the candles become fully transparent instead of being removed. | Overlay primitives, markers and drawings stay attached to the candle series, so every (time, price) anchor maps to the same pixel in both modes - no re-anchoring code, nothing recomputed (`docs/charting-tools.md`). |
+| Running candle | 1W and 1 / 3 / 6 / 12-month running period built from **completed daily candles** (`partial_week`, `running_period`); `is_complete` on every candle; display only. Indicators include it only on request (`include_partial`). | Spec: always show the current partial candle, never let detection see it; building it from daily candles keeps the latest price / time identical across D / W / M (`docs/multi-month-timeframes.md`). |
+| VCP v2 | Rewritten as a time-ordered walk over confirmed swing highs (k = 3) producing successive contractions T1 > T2 > ... -> pivot; spec defaults (base 15-120, >= 3 %, next <= 0.75 x, final <= 10 %, final volume <= 0.70 x the 50-day average, near pivot 3 %, breakout volume 1.5 x); 7 states; 6-part score 30/20/20/10/10/10; geometry `vcp-2.0` drawn as a structure (legs, swing points, depth labels, pivot, dry-up, breakout volume). VCPConfig 2.0.0. | The 1.0 detector's chart read as a box; the spec asks for the contraction structure. Engineering thresholds are flagged as such (`docs/vcp-methodology.md`). |
+| VCP prior history | `min_prior_bars` 50: a base needs 50 completed sessions before it. | A synthetic fresh listing's first base qualified as a VCP with only 5 prior bars, so no preceding uptrend could be measured; the IPO base scanner covers that case. |
+| VCP low-volume pivot cross | A close above the pivot without breakout volume stays **Near Pivot**, flagged `pivot_crossed_low_volume`. | Spec: breakout needs volume; the spec's state list has no "crossed without volume" state. |
+| IPO listing date | Official NSE `EQUITY_L.csv` (`DATE OF LISTING`) in `stocks.listing_date`; first-candle fallback **off** by default; a provider history that starts > 5 sessions after listing is not evaluated. | Spec: use the actual listing date. A renamed / re-listed ticker restarts its provider history and would look like an IPO (`docs/ipo-base.md`). |
+| IPO base vs VCP | Separate detector and evidence; an IPO base is never labelled a VCP. | Spec. |
+| About to break out | Separate state of the latest candle on the existing crossing engine (`breakout_setups`), published as `fresh_breakout` evidence of kind `state`; "both" rule (within 2 % **and** 0.5 ATR) by default; Very Near / expiry / rejection numbers are ASSUMPTIONs. SignalConfig 1.1.0. | The existing 10-day breakout rule must not change; "both" yields fewer, closer setups (spec: prefer fewer, explainable signals) (`docs/about-to-breakout.md`). |
+| Confluence 1.1 | Setup states in the 10-day breakout's family; IPO base (setup) and IPO breakout (trigger); VCP / IPO dry-up in the volume category (best + one capped bonus); Marubozu + volume combination (3 points); sector index RRG as a capped RS bonus that never scores alone (ASSUMPTION industry -> index map); 11 screens. | Spec 6: combine the new evidence without double counting (`docs/confluence-engine.md`). |
+| Confluence hook | The post-scan snapshot is built after the scan lock is released (`ScanManager._run`). | The hook held the lock and blocked an identical follow-up scan request (test `test_scan_locking_prevents_identical_overlap`). |
+| Sector cache | A per-scan dict passed into `_store_signals`. | A shared attribute raced between concurrent scans. |
+| Drawings per user | `chart_drawings.owner` (default `local`), `X-PAS-User` header, `created_timeframe`, `text` drawing type; a payload `owner` is accepted and ignored. | Spec 8: store by symbol + timeframe + user. The app has no login, so the user field separates people sharing one installation; it is not access control (`docs/chart-drawing-persistence.md`). |
+| Verification | `scripts/verify-improvements.mjs` (40 checks + 4 after a restart) on the synthetic demo; legacy suites made robust (stale debug state reset per chart, waits for the new chart). | No Yahoo / NSE access in the build session. |
+
 ## Phase boundaries
 
+* A5: line chart, running candles, VCP v2, IPO base (`ipo/`), about-to-breakout states, confluence 1.1, drawings per user (migration 9).
+* A1-A4: signal evidence, fresh / 52-week breakouts, Volume Shocker, VCP, chart preview, multi-month candles, Fibonacci, database drawings, Confluence Dashboard (migration 8).
 * P1: line patterns, per-scan lifecycle, `patterns.engine.track_detection` (frozen-geometry re-evaluation).
 * P2: flags, pennants, reversals, Forming, `extreme_exceeded`, S/R zones (`sr_zones`, migration 2).
 * E3: Stage Analysis + RS Line, stage results (migration 6), Stage page, RS pane, weekly overlays.

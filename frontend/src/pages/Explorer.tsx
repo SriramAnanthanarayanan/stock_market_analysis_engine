@@ -283,8 +283,8 @@ export function ExplorerView(props: ExplorerViewProps) {
   );
   const term = useChartTerminal("stock", termSrc, props.show);
   const chartShapes = useMemo(
-    () => [...(labelOpen ? labelPreview : []), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes],
-    [labelOpen, labelPreview, term.stageOverlay, term.vcpOverlay],
+    () => [...(labelOpen ? labelPreview : []), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes],
+    [labelOpen, labelPreview, term.stageOverlay, term.vcpOverlay, term.ipoOverlay],
   );
 
   const setTf = props.onTimeframe;
@@ -438,7 +438,8 @@ export function ExplorerView(props: ExplorerViewProps) {
               zones={data.sr_zones ?? []}
               showZones={toggles.sr}
               extraShapes={chartShapes}
-              extraMarkers={term.vcpOverlay.markers}
+              extraMarkers={[...term.vcpOverlay.markers, ...term.ipoOverlay.markers]}
+              volumeHighlights={[...term.vcpOverlay.volume, ...term.ipoOverlay.volume]}
               onCandleClick={labelOpen ? (c) => setLastClick({ ...c, n: Date.now() }) : undefined}
               resetKey={resetKey}
               latestKey={latestKey}
@@ -508,7 +509,7 @@ export function ExplorerView(props: ExplorerViewProps) {
           {isMultiMonth(timeframe) && (
             <div className="panel px-3 py-2 text-[11px] text-muted" data-testid="multimonth-note">
               {timeframe} candles are aggregated from completed daily candles. Pattern, S/R, candlestick and breakout detectors do not run on this timeframe; EMA / RSI / ATR are shown but not validated here.
-              {data?.partial_candle ? ` The running period (${data.partial_candle.sessions} sessions so far) is drawn muted and excluded from every calculation.` : ""}
+              {data?.partial_candle ? ` The running period (${data.partial_candle.sessions} sessions so far) is drawn muted and labelled INCOMPLETE; detection never uses it (indicators only with "Ind. incl. incomplete").` : ""}
             </div>
           )}
           <TechnicalPanel tech={term.tech} ind={term.indicators} timeframe={(isScanTimeframe(timeframe) ? timeframe : "1d") as Timeframe} error={term.techError} />

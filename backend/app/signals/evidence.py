@@ -128,6 +128,17 @@ class Publisher:
                 explanation=[f"Intraday touch of the level {t['level']} (provisional); the close was {t['close_status'].replace('_', ' ')}."],
             )
 
+    def breakout_setups(self, setups: list[dict[str, Any]], version: str, chash: str) -> None:
+        """About-to-break-out state of the 10-day level (latest candle; valid until the next scan)."""
+        for st in setups:
+            self.add(
+                source="fresh_breakout", signal_type=st["kind"], category="trigger", kind="state", direction=st["direction"],
+                signal_time=st["time"], signal_t=st["t"], age_bars=0, status=st["state"], lifecycle="active",
+                strength=st.get("distance_pct"), metrics=st, config_version=version, config_hash=chash,
+                expiry_rule="state: valid until the next scan",
+                explanation=[f"{st['state_label']}: close {st['close']} vs {st['level_kind']} {st['level']} ({st['distance_pct']} %, {st['distance_atr']} ATR)."],
+            )
+
     def week52(self, events: list[dict[str, Any]], touches: list[dict[str, Any]], state: dict[str, Any], version: str, chash: str) -> None:
         for e in events:
             vu, rule = self._event_expiry("week52", e["index"])
@@ -281,6 +292,39 @@ class Publisher:
             explanation=[f"RRG-style rotation vs {benchmark}: {q} (RS-Ratio {latest['ratio']}, RS-Momentum {latest['momentum']}, heading {latest['direction']})."],
         )
 
+    def ipo_base(self, r: dict[str, Any], version: str, chash: str) -> None:
+        """IPO base state (post-listing base -> pivot -> breakout on volume); the full
+        record (listing, discovery, base, pivot, breakout, geometry) rides in metrics."""
+        if not r or not r.get("status"):
+            return
+        brk = r.get("breakout") or {}
+        idx = brk.get("i")
+        vu, rule = (self._event_expiry("ipo_breakout", idx) if (idx is not None and r["status"] == "breakout") else (None, "formation: active while the base is valid (state of the latest daily scan)"))
+        self.add(
+            source="ipo_base", signal_type=f"ipo_{r['status']}", category="setup", kind="formation", direction="bullish",
+            signal_time=(r.get("base") or {}).get("end") or r.get("last_candle_time"), signal_t=None, age_bars=r.get("breakout_age"),
+            status=r["status"], lifecycle="invalidated" if r["status"] in ("invalidated", "failed_breakout") else "active",
+            quality=r.get("quality"), strength=r.get("quality"), underlying_id=r.get("ipo_id"), valid_until=vu, expiry_rule=rule,
+            metrics={k: v for k, v in r.items() if k != "explanation"}, config_version=version, config_hash=chash,
+            explanation=(r.get("explanation") or [])[:4],
+        )
+
+    def sector(self, entry: dict[str, Any] | None, index_code: str, industry: str | None, benchmark: str, version: str, chash: str) -> None:
+        """Sector / index strength: RRG quadrant of the stock's sector index vs the benchmark
+        (weekly; the industry -> index map is ConfluenceConfig.sector_index_map, an ASSUMPTION)."""
+        latest = (entry or {}).get("latest")
+        if not entry or entry.get("status") != "ok" or not latest:
+            return
+        q = latest["quadrant"]
+        self.add(
+            source="sector", signal_type=f"sector_{q}", category="relative_strength", kind="state",
+            direction="bullish" if q in ("leading", "improving") else "bearish",
+            signal_time=latest["week"], signal_t=latest["t"], age_bars=0, status="ok", lifecycle="active", strength=latest["ratio"],
+            metrics={**latest, "sector_index": index_code, "industry": industry, "benchmark": benchmark},
+            config_version=version, config_hash=chash, expiry_rule="state: valid until the next weekly scan",
+            explanation=[f"Sector index {index_code} ({industry}) is {q} vs {benchmark} (RS-Ratio {latest['ratio']}, RS-Momentum {latest['momentum']})."],
+        )
+
     def vcp(self, v: dict[str, Any], version: str, chash: str) -> None:
         if v.get("status") in (None, "none"):
             return
@@ -291,7 +335,12 @@ class Publisher:
             source="vcp", signal_type=f"vcp_{v['status']}", category="setup", kind="formation", direction="bullish",
             signal_time=v.get("base_end"), signal_t=None, age_bars=v.get("breakout_age"), status=v["status"], lifecycle=lifecycle,
             quality=v.get("quality"), strength=v.get("quality"), underlying_id=v.get("vcp_id"), valid_until=vu, expiry_rule=rule,
-            metrics={k: v.get(k) for k in ("status", "status_label", "qualified", "quality", "contractions", "depths_pct", "pivot", "pivot_distance_pct", "final_depth_pct", "base_sessions", "base_start", "base_end", "breakout_time", "breakout_age", "breakout_volume_ratio", "vcp_id")},
+            metrics={
+                **{k: v.get(k) for k in ("status", "status_label", "qualified", "quality", "contractions", "depths_pct", "pivot", "pivot_distance_pct", "final_depth_pct", "base_sessions", "base_start", "base_end", "breakout_time", "breakout_age", "breakout_volume_ratio", "vcp_id", "pivot_crossed_low_volume", "breakout_confirmation")},
+                "final_volume_vs_avg50": (v.get("metrics") or {}).get("final_volume_vs_avg50"),
+                "dry_up_days_final": (v.get("metrics") or {}).get("dry_up_days_final"),
+                "footprint": (v.get("metrics") or {}).get("footprint"),
+            },
             config_version=version, config_hash=chash,
             explanation=v.get("explanation", [])[:4],
         )

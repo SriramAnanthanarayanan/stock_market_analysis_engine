@@ -207,15 +207,121 @@ export const advApi = {
   volumeShocks: (q: Q) => request<VolumeResult>(`/api/scan/volume-shocks${qs(q)}`),
   week52: (q: Q) => request<Week52Result>(`/api/scan/52week${qs(q)}`),
   evidence: (q: Q) => request<AdvResult<Evidence>>(`/api/evidence${qs(q)}`),
-  config: (which: "signals" | "vcp" | "confluence") => request<{ version: string; config_hash: string; parameters: ConfigParamRow[]; detector_timeframes?: Record<string, string[]> }>(`/api/config/${which}`),
+  breakoutSetups: (q: Q) => request<SetupResult>(`/api/scan/breakout-setups${qs(q)}`),
+  config: (which: "signals" | "vcp" | "confluence" | "ipo") => request<{ version: string; config_hash: string; parameters: ConfigParamRow[]; detector_timeframes?: Record<string, string[]> }>(`/api/config/${which}`),
 };
 
 // ---------------------------------------------------------------- VCP (P2)
-export type VcpStatus = "developing" | "forming" | "tightening" | "near_pivot" | "breakout" | "breakout_pending" | "pivot_cross_low_volume" | "failed_breakout" | "invalidated";
+// ---------------------------------------------------------------- about to break out (10-day level)
+export type SetupState = "approaching" | "very_near" | "touched" | "breakout" | "confirmed_breakout" | "rejected" | "expired";
+
+export interface SetupRow extends StockRef {
+  evidence_id: string;
+  state: SetupState;
+  state_label: string;
+  direction: "bullish" | "bearish";
+  level: number;
+  level_kind: string;
+  level_time: string;
+  reference_start: string;
+  reference_end: string;
+  time: string;
+  t: number;
+  close: number;
+  distance_pct: number | null;
+  distance_atr: number | null;
+  atr: number | null;
+  ema20: number | null;
+  ema50: number | null;
+  ema20_vs_ema50: "above" | "below" | null;
+  volume_ratio: number | null;
+  range_10d_pct: number | null;
+  sessions_in_setup: number;
+  event_time?: string;
+  event_age?: number;
+  rs: number | null;
+  stage: StageContext | null;
+  setup_quality: number;
+  setup_quality_components: QualityComp[];
+}
+
+export interface SetupResult extends AdvResult<SetupRow> {
+  state_labels: Record<string, string>;
+  thresholds: { approach_pct: number; approach_atr: number; very_near_pct: number; very_near_atr: number; rule: string; expiry_sessions: number; rejection_sessions: number };
+}
+
+// ---------------------------------------------------------------- IPO base breakout
+export type IpoStatus = "too_young" | "discovery_phase" | "base_forming" | "base_validated" | "near_pivot" | "breakout" | "failed_breakout" | "invalidated";
+
+export interface IpoGeometry {
+  schema_version: string;
+  listing: { date: string; t: number; source: string; first_candle: string };
+  discovery: { t_start: number; t_end: number; bars: number; high: number; low: number; complete: boolean };
+  base: IpoBase | null;
+  pivot: { p: number; t: number; t_end: number } | null;
+  breakout: { i: number; t: number; time: string; close: number; volume: number | null; volume_ratio: number | null; volume_ok: boolean; age: number } | null;
+  failure: { i: number; t: number; time: string } | null;
+  last_candle: { t: number; p: number };
+}
+
+export interface IpoBase {
+  start: string;
+  t_start: number;
+  end: string;
+  t_end: number;
+  high: number;
+  low: number;
+  depth_pct: number;
+  length: number;
+  touches: { t: number; time: string; p: number }[];
+  settle_ratio: number | null;
+  volume_discovery: number | null;
+  volume_right: number | null;
+  volume_dry_up_ratio: number | null;
+}
+
+export interface IpoRow extends StockRef {
+  ipo_id: string;
+  status: IpoStatus;
+  status_label: string;
+  status_reason: string | null;
+  quality: number;
+  quality_components: QualityComp[];
+  gates: VcpGate[];
+  listing: IpoGeometry["listing"];
+  age_bars: number;
+  discovery: IpoGeometry["discovery"];
+  base: IpoBase | null;
+  pivot: number | null;
+  pivot_distance_pct: number | null;
+  breakout: IpoGeometry["breakout"];
+  breakout_age: number | null;
+  breakout_volume_ratio: number | null;
+  failure: IpoGeometry["failure"];
+  last_close: number | null;
+  last_candle_time: string | null;
+  explanation: string[];
+  geometry?: IpoGeometry;
+}
+
+export interface IpoScanResult extends AdvResult<IpoRow> {
+  status_labels: Record<string, string>;
+  listing_dates_loaded?: number;
+  params?: Record<string, number>;
+}
+
+export const ipoApi = {
+  scan: (q: Q) => request<IpoScanResult>(`/api/scan/ipo-base${qs(q)}`),
+  symbol: (symbol: string, asof?: string | null) => request<{ symbol: string; source: string; ipo: IpoRow | null; listing_date: string | null; listing_date_source: string | null; note?: string }>(`/api/ipo/symbol${qs({ symbol, asof })}`),
+};
+
+// ---------------------------------------------------------------- VCP
+export type VcpStatus = "developing" | "forming" | "final_contraction" | "near_pivot" | "breakout" | "failed_breakout" | "invalidated";
 
 export interface VcpContraction {
   seq: number;
   label: string;
+  final?: boolean;
   start_time: string;
   end_time: string;
   start_price: number;
@@ -223,19 +329,27 @@ export interface VcpContraction {
   depth: number;
   depth_pct: number;
   bars: number;
+  recovery_bars?: number | null;
   avg_volume: number | null;
+  median_volume?: number | null;
   min_volume: number | null;
   volume_vs_avg50: number | null;
+  volume_vs_prev?: number | null;
+  atr_range?: number | null;
   provisional: boolean;
 }
 
+/** VCP chart geometry (schema vcp-2.0): the successive contractions T1..Tn as swing
+ *  legs, the final contraction, pivot, volume dry-up window and breakout - not a box. */
 export interface VcpGeometry {
   schema_version: string;
   vcp_id: string;
   base: { i_start: number; t_start: number; i_end: number; t_end: number; p_high: number; p_low: number };
-  contractions: { seq: number; label: string; t_high: number; p_high: number; t_low: number; p_low: number; depth_pct: number; volume_vs_avg50: number | null; provisional: boolean }[];
+  contractions: { seq: number; label: string; final?: boolean; t_high: number; p_high: number; t_low: number; p_low: number; depth_pct: number; bars?: number; volume_vs_avg50: number | null; atr_range?: number | null; provisional: boolean }[];
+  swings?: { t: number; p: number; kind: "high" | "low"; label: string }[];
   pivot: { i: number; t: number; p: number; t_end: number };
-  breakout: { i: number; t: number; time: string; close: number; volume_ratio: number | null; volume_ok: boolean } | null;
+  dry_up?: { t_start: number; t_end: number; volume_ratio: number | null; dry_up_days: number | null; passed: boolean };
+  breakout: { i: number; t: number; time: string; close: number; volume?: number | null; volume_ratio: number | null; volume_ok: boolean } | null;
   event: { i: number; t: number; status: string } | null;
   last_candle: { i: number; t: number; p: number };
 }
@@ -290,6 +404,8 @@ export interface VcpRow extends StockRef {
   metrics: Record<string, unknown> & { volume_trend_final_vs_first?: number | null; final_volume_vs_avg50?: number | null; dry_up_days_final?: number | null; prior_advance_pct?: number | null; contraction_volumes?: (number | null)[] };
   stage?: StageContext | null;
   trend_context_ok?: boolean | null;
+  pivot_crossed_low_volume?: boolean;
+  breakout_confirmation?: string | null;
   geometry?: VcpGeometry;
   contraction_list?: VcpContraction[];
   config_version: string;
@@ -355,12 +471,19 @@ export interface ConfluenceSummary {
   rs: number | null;
   rs_trend: string | null;
   rrg_quadrant: string | null;
+  sector_index?: string | null;
+  sector_quadrant?: string | null;
+  ipo_status?: IpoStatus | null;
+  ipo_label?: string | null;
+  setup_state?: SetupState | null;
+  setup_label?: string | null;
+  setup_distance_pct?: number | null;
   latest_signal_time: string | null;
   close: number | null;
 }
 
 export interface ConfluenceCombo {
-  type: "breakout_marubozu_volume" | "breakout_volume" | "breakout_marubozu" | null;
+  type: "breakout_marubozu_volume" | "breakout_volume" | "breakout_marubozu" | "marubozu_volume" | null;
   points: number;
   session: string | null;
 }
@@ -448,8 +571,27 @@ export class ConflictError extends Error {
   }
 }
 
+const USER_KEY = "pas.drawingUser.v1";
+/** Drawings are stored per user (X-PAS-User); the single local user is "local". */
+export function drawingUser(): string {
+  try {
+    const u = window.localStorage.getItem(USER_KEY)?.trim();
+    return u && /^[A-Za-z0-9_.@-]{1,64}$/.test(u) ? u : "local";
+  } catch {
+    return "local";
+  }
+}
+export function setDrawingUser(u: string): void {
+  try {
+    if (u.trim() && u.trim() !== "local") window.localStorage.setItem(USER_KEY, u.trim());
+    else window.localStorage.removeItem(USER_KEY);
+  } catch {
+    /* storage unavailable: stays "local" */
+  }
+}
+
 async function drawingRequest<T>(path: string, init?: RequestInit & { keepalive?: boolean }): Promise<T> {
-  const res = await fetch(path, { headers: { Accept: "application/json", "Content-Type": "application/json" }, ...init });
+  const res = await fetch(path, { ...init, headers: { Accept: "application/json", "Content-Type": "application/json", "X-PAS-User": drawingUser() } });
   if (res.status === 409) {
     const body = await res.json().catch(() => ({}));
     throw new ConflictError(body?.detail?.message ?? "conflict", body?.detail?.current ?? null);
@@ -470,14 +612,14 @@ async function drawingRequest<T>(path: string, init?: RequestInit & { keepalive?
   return (await res.json()) as T;
 }
 
-type DrawingBody = Omit<Drawing, "version" | "created_at" | "updated_at" | "origin">;
+type DrawingBody = Omit<Drawing, "version" | "created_at" | "updated_at" | "origin" | "owner">;
 
 export const drawingsApi = {
   list: (instrument: string, symbol: string) => drawingRequest<{ items: Drawing[]; server_time: string }>(`/api/drawings${qs({ instrument, symbol })}`),
   create: (d: DrawingBody, keepalive = false) => drawingRequest<Drawing>("/api/drawings", { method: "POST", body: JSON.stringify(d), keepalive }),
   update: (d: DrawingBody, baseVersion: number, keepalive = false) => drawingRequest<Drawing>(`/api/drawings/${encodeURIComponent(d.drawing_id)}`, { method: "PUT", body: JSON.stringify({ ...d, base_version: baseVersion }), keepalive }),
   remove: (id: string, version: number, keepalive = false) => drawingRequest<void>(`/api/drawings/${encodeURIComponent(id)}${qs({ version })}`, { method: "DELETE", keepalive }),
-  exportUrl: "/api/drawings/export",
+  exportUrl: () => `/api/drawings/export${qs({ user: drawingUser() })}`,
   import: (payload: unknown) => drawingRequest<{ inserted: number; updated: number; skipped: number; invalid: number; errors: string[] }>("/api/drawings/import", { method: "POST", body: JSON.stringify(payload) }),
   templates: (drawingType?: string, symbol?: string) => drawingRequest<{ items: DrawingTemplate[] }>(`/api/drawing-templates${qs({ drawing_type: drawingType, symbol })}`),
   saveTemplate: (t: Omit<DrawingTemplate, "created_at" | "updated_at">) => drawingRequest<DrawingTemplate>("/api/drawing-templates", { method: "POST", body: JSON.stringify(t) }),

@@ -46,6 +46,7 @@ export const CHART_COLORS = {
   grid: "rgba(25,195,218,0.07)",
   border: "rgba(25,195,218,0.25)",
   candleUp: "#3FBF9A",
+  lineClose: "#19C3DA", // line chart mode (closes)
   candleDown: "#E8684A",
   volumeUp: "rgba(63,191,154,0.35)",
   volumeDown: "rgba(232,104,74,0.35)",

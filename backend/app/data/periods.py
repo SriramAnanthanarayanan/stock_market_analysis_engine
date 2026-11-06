@@ -113,6 +113,82 @@ def split_complete(daily_completed: pd.DataFrame, timeframe: str, cutoff, calend
     return agg[done], agg[~done]
 
 
+def partial_week(daily_completed: pd.DataFrame, cutoff, calendar: NSECalendar) -> pd.DataFrame:
+    """The running NSE week (Monday 09:15 IST label, like every weekly candle) built
+    from the completed daily candles of that week so far, or an empty frame when the
+    latest completed day's week has already closed at the cutoff (then it is a
+    regular, complete weekly candle)."""
+    cols = ["open", "high", "low", "close", "volume", "source_bars", "first_session", "last_session"]
+    if daily_completed is None or daily_completed.empty:
+        return pd.DataFrame(columns=cols)
+    idx = daily_completed.index.tz_convert(IST)
+    last = idx[-1]
+    monday = pd.Timestamp(last.date() - timedelta(days=last.weekday()), tz=IST) + _OPEN
+    end = calendar.bar_ends(pd.DatetimeIndex([monday]), "1w")[0]
+    if end <= pd.Timestamp(cutoff).tz_convert(IST):
+        return pd.DataFrame(columns=cols)
+    week = daily_completed[idx >= monday]
+    vol = week["volume"].to_numpy(dtype=float)
+    known = vol[np.isfinite(vol)]
+    out = pd.DataFrame(
+        {
+            "open": [float(week["open"].iloc[0])],
+            "high": [float(week["high"].max())],
+            "low": [float(week["low"].min())],
+            "close": [float(week["close"].iloc[-1])],
+            "volume": [float(known.sum()) if len(known) else np.nan],
+            "source_bars": [int(len(week))],
+            "first_session": [week.index[0]],
+            "last_session": [week.index[-1]],
+        },
+        index=pd.DatetimeIndex([monday], name="ts"),
+    )
+    if ADJ_CLOSE in week.columns:
+        out[ADJ_CLOSE] = [float(week[ADJ_CLOSE].iloc[-1])]
+    return out
+
+
+def running_period(daily_completed: pd.DataFrame, timeframe: str, cutoff, calendar: NSECalendar) -> pd.DataFrame:
+    """The current incomplete 1W / 1-12 month candle from completed daily candles (may be empty).
+    Display only: detectors and default indicators never see it."""
+    if timeframe == "1w":
+        return partial_week(daily_completed, cutoff, calendar)
+    if timeframe in MULTI_MONTH_MONTHS:
+        return split_complete(daily_completed, timeframe, cutoff, calendar)[1]
+    return pd.DataFrame()
+
+
+def partial_record(part: pd.DataFrame, timeframe: str, calendar: NSECalendar) -> dict[str, Any] | None:
+    """API shape of the running candle: OHLCV + ``is_complete: false`` and its sessions."""
+    if part is None or part.empty:
+        return None
+    r = part.iloc[-1]
+    ts = part.index[-1]
+    if timeframe == "1w":
+        end = calendar.bar_ends(pd.DatetimeIndex([ts]), "1w")[0]
+    else:
+        end = period_bar_ends(part.index[-1:], MULTI_MONTH_MONTHS[timeframe], calendar)[0]
+    vol = float(r["volume"]) if r["volume"] is not None and np.isfinite(float(r["volume"])) else None
+    last = r["last_session"]
+    first = r["first_session"]
+    return {
+        "t": int(ts.timestamp()),
+        "o": float(r["open"]),
+        "h": float(r["high"]),
+        "l": float(r["low"]),
+        "c": float(r["close"]),
+        "v": vol,
+        "is_complete": False,
+        "label": "INCOMPLETE",
+        "timeframe": timeframe,
+        "sessions": int(r["source_bars"]),
+        "first_session": pd.Timestamp(first).isoformat() if first is not None else None,
+        "last_session": pd.Timestamp(last).isoformat() if last is not None else None,
+        "period_end": pd.Timestamp(end).isoformat(),
+        "note": "Running period aggregated from completed daily candles so far (open = first day's open, high/low so far, close = latest close, volume accumulated). Display only: pattern detection and default indicators use completed candles.",
+    }
+
+
 def candle_meta(frame: pd.DataFrame) -> list[dict[str, Any]]:
     out = []
     for ts, r in frame.iterrows():

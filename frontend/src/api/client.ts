@@ -123,7 +123,7 @@ export const api = {
     request<SweepResult>("/api/evaluation/sweep", post({ options, param, values, labels: clean(labels) })),
   runs: () => request<{ run_id: string; created_at: string; kind: string; config_version: string; label_count: number; overrides: unknown }[]>("/api/evaluation/runs"),
   // E1 ---------------------------------------------------------------
-  indicators: (q: { symbol: string; timeframe: ChartTf; asof?: string | null; scan_id?: string | null; start_t?: number; ema?: string; rsi_period?: number; atr_period?: number; instrument?: string }) =>
+  indicators: (q: { symbol: string; timeframe: ChartTf; asof?: string | null; scan_id?: string | null; start_t?: number; ema?: string; rsi_period?: number; atr_period?: number; instrument?: string; include_partial?: boolean | null }) =>
     request<IndicatorPayload>(`/api/indicators${qs(q)}`),
   technical: (q: { symbol: string; timeframe: ChartTf; asof?: string | null; scan_id?: string | null; start_t?: number; confirm?: number; instrument?: string }) =>
     request<TechnicalPayload>(`/api/technical${qs(q)}`),

@@ -83,16 +83,20 @@ def test_advanced_configs_pinned_documented_and_separate():
     from app.config import (
         CONFLUENCE_PARAM_META,
         DEFAULT_CONFLUENCE_CONFIG,
+        DEFAULT_IPO_CONFIG,
         DEFAULT_SIGNAL_CONFIG,
         DEFAULT_STAGE_CONFIG,
         DEFAULT_VCP_CONFIG,
         KNOWN_CONFLUENCE_CONFIG_HASHES,
+        KNOWN_IPO_CONFIG_HASHES,
         KNOWN_SIGNAL_CONFIG_HASHES,
         KNOWN_STAGE_CONFIG_HASHES,
         KNOWN_VCP_CONFIG_HASHES,
+        IPO_PARAM_META,
         SIGNAL_PARAM_META,
         VCP_PARAM_META,
         ConfluenceConfig,
+        IPOConfig,
         SignalConfig,
         VCPConfig,
     )
@@ -101,6 +105,7 @@ def test_advanced_configs_pinned_documented_and_separate():
         (DEFAULT_SIGNAL_CONFIG, KNOWN_SIGNAL_CONFIG_HASHES, SIGNAL_PARAM_META, SignalConfig),
         (DEFAULT_VCP_CONFIG, KNOWN_VCP_CONFIG_HASHES, VCP_PARAM_META, VCPConfig),
         (DEFAULT_CONFLUENCE_CONFIG, KNOWN_CONFLUENCE_CONFIG_HASHES, CONFLUENCE_PARAM_META, ConfluenceConfig),
+        (DEFAULT_IPO_CONFIG, KNOWN_IPO_CONFIG_HASHES, IPO_PARAM_META, IPOConfig),
     ):
         assert known.get(cfg.version) == config_hash(cfg), f"{cls.__name__}: register the hash of version {cfg.version}"
         for f in fields(cls):

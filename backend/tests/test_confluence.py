@@ -149,7 +149,10 @@ def test_marubozu_and_volume_shock_same_session():
     vc = cat(r, "volume_candle")
     # V = (2.75 - 1.5) / 2.5 = 0.5 ; C = 0.8 + 0.2 x 0.5 = 0.9 ; 0.6 V + 0.4 C
     assert vc["parts"] == {"volume": 0.5, "candle": 0.9} and vc["score"] == pytest.approx(0.6 * 0.5 + 0.4 * 0.9)
-    assert r["combo"]["type"] is None and r["bonus"] == 0.0  # no breakout: no combination bonus
+    # Marubozu + strong volume on the same session without a breakout: the small Marubozu + volume combination
+    assert r["combo"]["type"] == "marubozu_volume" and r["bonus"] == CFG.combo_points["marubozu_volume"] < CFG.combo_points["breakout_volume"]
+    other_day = score_symbol([shock(1, rvol=2.75), maru(0, range_atr=1.5), vstate()], [], "bullish", CFG)
+    assert other_day["combo"]["type"] is None  # different sessions are never combined
     full = score_symbol([fresh(0), shock(0, rvol=2.75), maru(0, range_atr=1.5), vstate()], [], "bullish", CFG)
     assert full["combo"]["type"] == "breakout_marubozu_volume" and full["bonus"] == CFG.combo_points["breakout_marubozu_volume"]
 
@@ -282,6 +285,73 @@ def test_bands_and_configurable_weights():
     assert KNOWN_CONFLUENCE_CONFIG_HASHES[CFG.version] == config_hash(CFG)
 
 
+def setup_state(st="very_near", direction="bullish", dist=0.6):
+    return ev("fresh_breakout", f"breakout_setup_{st}", category="trigger", kind="state", direction=direction, status=st, metrics={"state": st, "state_label": st.replace("_", " ").title(), "distance_pct": dist, "distance_atr": 0.2, "level_kind": "10D high"})
+
+
+def ipo(status="near_pivot", quality=80.0, dry=0.5, breakout_age=None):
+    m = {"status": status, "status_label": status.replace("_", " ").title(), "base": {"end": day(1), "volume_dry_up_ratio": dry}, "breakout": {"volume_ratio": 2.0, "time": day(breakout_age or 0)} if status == "breakout" else None}
+    return ev("ipo_base", f"ipo_{status}", category="setup", kind="formation", status=status, age=breakout_age, quality=quality, uid="ipo1", lifecycle="invalidated" if status in ("invalidated", "failed_breakout") else "active", metrics=m)
+
+
+def sector(q="leading"):
+    return ev("sector", f"sector_{q}", category="relative_strength", kind="state", status="ok", metrics={"quadrant": q, "sector_index": "NIFTY IT", "benchmark": "NIFTY 500"})
+
+
+def test_about_to_breakout_counts_but_never_adds_to_the_breakout():
+    pre = score_symbol([setup_state("very_near"), vstate()], [], "bullish", CFG)
+    t = cat(pre, "trigger")
+    assert t["score"] == CFG.setup_state_scores["very_near"] and t["evidence"][0]["status"] == "used"
+    both = score_symbol([setup_state("touched"), fresh(0, dist=0.0), vstate()], [], "bullish", CFG)
+    tb = cat(both, "trigger")
+    # same family as the 10-day breakout: the stronger one counts, the other is overlap
+    assert tb["score"] == pytest.approx(max(0.5, CFG.setup_state_scores["touched"])) and sorted(e["status"] for e in tb["evidence"]) == ["overlapping", "used"]
+    assert summarize([setup_state("approaching")], [], "bullish", CFG)["setup_state"] == "approaching"
+
+
+def test_ipo_base_setup_and_breakout_trigger():
+    r = score_symbol([ipo("near_pivot", 80.0), vstate()], [], "bullish", CFG)
+    assert cat(r, "setup")["score"] == pytest.approx(0.8 * CFG.ipo_state_scores["near_pivot"])
+    bo = score_symbol([ipo("breakout", 90.0, breakout_age=1), vstate()], [], "bullish", CFG)
+    assert cat(bo, "trigger")["score"] == pytest.approx(0.9) and cat(bo, "trigger")["evidence"][0]["source"] == "ipo_base"
+    old = score_symbol([ipo("breakout", 90.0, breakout_age=CFG.freshness_sessions["ipo_breakout"] + 1), vstate()], [], "bullish", CFG)
+    assert cat(old, "trigger")["score"] == 0.0 and cat(old, "trigger")["evidence"][0]["status"] == "expired"
+    dead = score_symbol([ipo("failed_breakout", 90.0)], [], "bullish", CFG)
+    assert cat(dead, "setup")["score"] == 0.0 and cat(dead, "setup")["evidence"][0]["status"] == "invalidated"
+    young = score_symbol([ipo("too_young", 0.0)], [], "bullish", CFG)
+    assert cat(young, "setup")["score"] == 0.0
+    s = summarize([ipo("breakout", 90.0, breakout_age=0)], [], "bullish", CFG)
+    assert s["ipo_status"] == "breakout"
+    assert cat(score_symbol([ipo("near_pivot")], [], "bearish", CFG), "setup")["score"] == 0.0
+
+
+def test_volume_dry_up_and_expansion_are_capped():
+    v = vcp("near_pivot", 80.0)
+    v["metrics"]["final_volume_vs_avg50"] = 0.5
+    dry = score_symbol([v, vstate()], [], "bullish", CFG)
+    assert cat(dry, "volume_candle")["parts"]["volume"] == 1.0  # dried up to 0.5 x the 50-day average
+    both = score_symbol([v, ipo("near_pivot", 80.0, dry=0.5), shock(0, rvol=4.0), vstate()], [], "bullish", CFG)
+    vc = cat(both, "volume_candle")
+    # expansion (shock) and dry-up are different families: best + one capped bonus; the second dry-up overlaps
+    assert vc["parts"]["volume"] == 1.0
+    sts = sorted(e["status"] for e in vc["evidence"])
+    assert sts.count("used") == 1 and sts.count("bonus") == 1 and sts.count("overlapping") == 1
+    wet = score_symbol([ipo("near_pivot", 80.0, dry=1.2)], [], "bullish", CFG)
+    assert cat(wet, "volume_candle")["parts"]["volume"] == 0.0
+
+
+def test_sector_strength_is_a_capped_bonus_and_never_alone():
+    base = score_symbol([], [rsline(0.02, "flat", "flat")], "bullish", CFG)
+    plus = score_symbol([], [rsline(0.02, "flat", "flat"), sector("leading")], "bullish", CFG)
+    assert cat(plus, "relative_strength")["score"] == pytest.approx(cat(base, "relative_strength")["score"] + CFG.second_evidence_bonus * 1.0)
+    assert ("sector", "bonus") in statuses(cat(plus, "relative_strength"))
+    weak = score_symbol([], [rsline(0.02, "flat", "flat"), sector("lagging")], "bullish", CFG)
+    assert cat(weak, "relative_strength")["score"] == cat(base, "relative_strength")["score"]
+    alone = score_symbol([], [sector("leading")], "bullish", CFG)
+    assert cat(alone, "relative_strength")["available"] is False and ("sector", "overlapping") in statuses(cat(alone, "relative_strength"))
+    assert summarize([], [sector("improving")], "bullish", CFG)["sector_quadrant"] == "improving"
+
+
 # ---------------------------------------------------------------- snapshots + API
 
 @pytest.fixture(scope="module")
@@ -315,7 +385,7 @@ def test_snapshot_is_stored_after_the_scan_and_reused(adv):
     r1 = client.get("/api/confluence").json()
     r2 = client.get("/api/confluence", params={"direction": "bearish"}).json()
     assert r1["snapshot"]["snapshot_id"] == runs[0]["snapshot_id"] == r2["snapshot"]["snapshot_id"]
-    assert r1["snapshot"]["config_hash"] == KNOWN_CONFLUENCE_CONFIG_HASHES["1.0.0"] and r1["context_scan"]["scan_id"] == w["scan_id"]
+    assert r1["snapshot"]["config_hash"] == KNOWN_CONFLUENCE_CONFIG_HASHES[CFG.version] and r1["context_scan"]["scan_id"] == w["scan_id"]
     with s.engine.connect() as conn:
         n = conn.execute(select(func.count()).select_from(db.confluence_snapshots).where(db.confluence_snapshots.c.snapshot_id == r1["snapshot"]["snapshot_id"])).scalar()
     assert n >= 2 * len({x["symbol"] for x in r1["items"]})  # both directions of every scored symbol
@@ -450,10 +520,10 @@ def test_weekly_snapshot_and_config_endpoint(adv):
     r = client.get("/api/confluence", params={"timeframe": "1w", "include_unranked": True}).json()
     assert r["snapshot"]["primary_scan_id"] == w["scan_id"] == r["snapshot"]["context_scan_id"] and r["snapshot"]["timeframe"] == "1w"
     cfg = client.get("/api/config/confluence").json()
-    assert cfg["version"] == "1.0.0" and cfg["config_hash"] == KNOWN_CONFLUENCE_CONFIG_HASHES["1.0.0"]
+    assert cfg["version"] == CFG.version and cfg["config_hash"] == KNOWN_CONFLUENCE_CONFIG_HASHES[CFG.version]
     names = {p["name"] for p in cfg["parameters"]}
     assert {"weights", "bands", "freshness_sessions", "min_coverage", "combo_points"} <= names
-    assert len(client.get("/api/confluence/screens").json()["items"]) == 9
+    assert len(client.get("/api/confluence/screens").json()["items"]) == 11
 
 
 def test_no_snapshot_without_a_scan(tmp_path_factory):

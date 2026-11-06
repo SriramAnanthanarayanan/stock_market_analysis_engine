@@ -153,6 +153,7 @@ try {
   await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/show=marubozu/);
   await waitDbg(() => Object.keys(window.__pasChart.techMarkers).some((k) => k.endsWith("marubozu")));
+  await page.waitForSelector('[data-testid="marubozu-list"] li', { timeout: 20000 }).catch(() => null); // the page's own panel (not the closing preview)
   d = await dbg();
   check("Marubozu markers and metrics", (await page.locator('[data-testid="marubozu-list"] li').count()) > 0, `${firstCandle?.slice(0, 30)} -> ${JSON.stringify(d.techMarkers)}`);
 
@@ -162,9 +163,9 @@ try {
   await page.waitForSelector('[data-testid="chart-preview"]');
   await page.click('[data-testid="preview-open-page"]'); // the row opens the preview; "Open page" -> the chart page
   await page.waitForURL(/show=levels,breakouts/);
-  await waitDbg(() => window.__pasChart.dailyLevels === 2 && Object.keys(window.__pasChart.techMarkers).some((k) => k.includes("10d")));
+  const levelsShown = await waitDbg(() => window.__pasChart.dailyLevels === 2 && Object.keys(window.__pasChart.techMarkers).some((k) => k.includes("10d"))).then(() => true).catch(() => false);
   d = await dbg();
-  check("daily breakout markers and 10D levels on 1D", d.dailyLevels === 2, JSON.stringify(d.techMarkers));
+  check("daily breakout markers and 10D levels on 1D", levelsShown, `${JSON.stringify(d.techMarkers)} levels=${d.dailyLevels} ${new URL(page.url()).pathname}`);
   const sym1d = new URL(page.url()).pathname.split("/").pop();
   await page.screenshot({ path: join(outDir, "e1-breakout.png") });
   await page.click('[data-testid="explorer-tf-1h"]');

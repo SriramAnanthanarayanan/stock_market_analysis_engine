@@ -24,10 +24,10 @@ const STAGE_OPTS = [
 ];
 const VCP_OPTS = [
   { v: "", label: "Any" },
-  { v: "near_pivot,tightening,forming,breakout,breakout_pending,pivot_cross_low_volume", label: "Any active VCP" },
+  { v: "near_pivot,final_contraction,forming,breakout", label: "Any active VCP" },
   { v: "near_pivot", label: "Near pivot" },
-  { v: "tightening", label: "Tightening" },
-  { v: "breakout,breakout_pending", label: "Breakout" },
+  { v: "final_contraction", label: "Final Contraction" },
+  { v: "breakout", label: "Breakout" },
   { v: "forming", label: "Forming" },
 ];
 
@@ -150,10 +150,23 @@ export function ConfluenceDashboard() {
     {
       key: "fb",
       label: "10D",
-      render: (r) => (r.summary.fresh_breakout ? <span className={r.direction === "bullish" ? "text-up" : "text-down"} title={r.summary.fresh_breakout.first_in_lookback === false ? "not the first breakout in its lookback" : "first breakout in its lookback"}>{ago(r.summary.fresh_breakout.age, r.timeframe)}{r.summary.fresh_breakout.first_in_lookback === false ? " (not first)" : ""}</span> : <span className="text-muted">-</span>),
-      sort: (r) => (r.summary.fresh_breakout ? -r.summary.fresh_breakout.age : null),
-      title: "Fresh 10-day breakout (still fresh)",
+      render: (r) =>
+        r.summary.fresh_breakout ? (
+          <span className={r.direction === "bullish" ? "text-up" : "text-down"} title={r.summary.fresh_breakout.first_in_lookback === false ? "not the first breakout in its lookback" : "first breakout in its lookback"}>
+            {ago(r.summary.fresh_breakout.age, r.timeframe)}
+            {r.summary.fresh_breakout.first_in_lookback === false ? " (not first)" : ""}
+          </span>
+        ) : r.summary.setup_state && ["approaching", "very_near", "touched"].includes(r.summary.setup_state) ? (
+          <span className="text-accent" title="About to break out of the 10-day level (before the breakout)" data-testid="cf-setup">
+            {r.summary.setup_label} {r.summary.setup_distance_pct != null ? `${r.summary.setup_distance_pct.toFixed(1)}%` : ""}
+          </span>
+        ) : (
+          <span className="text-muted">-</span>
+        ),
+      sort: (r) => (r.summary.fresh_breakout ? -r.summary.fresh_breakout.age : r.summary.setup_distance_pct != null ? -100 - r.summary.setup_distance_pct : null),
+      title: "Fresh 10-day breakout (still fresh), or the about-to-break-out state before it",
     },
+    { key: "ipo", label: "IPO base", render: (r) => (r.summary.ipo_label ? <span className={r.summary.ipo_status === "breakout" ? "text-up" : r.summary.ipo_status === "near_pivot" ? "text-accent" : "text-muted"}>{r.summary.ipo_label}</span> : <span className="text-muted">-</span>), sort: (r) => r.summary.ipo_status ?? "" },
     { key: "w52", label: "52W", render: (r) => (r.summary.week52 ? <span className={r.direction === "bullish" ? "text-up" : "text-down"}>{ago(r.summary.week52.age, r.timeframe)}</span> : <span className="text-muted">-</span>), sort: (r) => (r.summary.week52 ? -r.summary.week52.age : null), title: "52-week breakout (still fresh)" },
     { key: "maru", label: "Marubozu", render: (r) => (r.summary.marubozu ? ago(r.summary.marubozu.age, r.timeframe) : <span className="text-muted">-</span>), sort: (r) => (r.summary.marubozu ? -r.summary.marubozu.age : null) },
     { key: "vs", label: "Vol shock", render: (r) => (r.summary.volume_shock ? <span title={`${r.summary.volume_shock.direction} volume shock`}>{r.summary.volume_shock.rvol.toFixed(1)}x · {ago(r.summary.volume_shock.age, r.timeframe)}</span> : <span className="text-muted">-</span>), sort: (r) => r.summary.volume_shock?.rvol ?? null },
@@ -163,7 +176,17 @@ export function ConfluenceDashboard() {
     {
       key: "rs",
       label: "RS / RRG",
-      render: (r) => (r.summary.rs === null && !r.summary.rrg_quadrant ? <span className="text-muted">-</span> : <span>{r.summary.rs !== null ? `RS ${r.summary.rs >= 0 ? "+" : ""}${r.summary.rs.toFixed(3)}` : ""}{r.summary.rs !== null && r.summary.rrg_quadrant ? " · " : ""}{r.summary.rrg_quadrant ? humanize(r.summary.rrg_quadrant) : ""}</span>),
+      render: (r) =>
+        r.summary.rs === null && !r.summary.rrg_quadrant ? (
+          <span className="text-muted">-</span>
+        ) : (
+          <span title={r.summary.sector_index ? `Sector ${r.summary.sector_index}: ${r.summary.sector_quadrant}` : undefined}>
+            {r.summary.rs !== null ? `RS ${r.summary.rs >= 0 ? "+" : ""}${r.summary.rs.toFixed(3)}` : ""}
+            {r.summary.rs !== null && r.summary.rrg_quadrant ? " · " : ""}
+            {r.summary.rrg_quadrant ? humanize(r.summary.rrg_quadrant) : ""}
+            {r.summary.sector_quadrant ? <span className="text-muted"> · sector {humanize(r.summary.sector_quadrant)}</span> : null}
+          </span>
+        ),
       sort: (r) => r.summary.rs,
     },
     { key: "latest", label: "Latest signal", render: (r) => fmtBarTime(r.latest_signal_time, r.timeframe), sort: (r) => r.latest_signal_time ?? "" },

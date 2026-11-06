@@ -213,7 +213,7 @@ def index_chart(
     n = len(frame)
     first = max(0, n - s.settings.chart_max_candles)
     o, h, l, c, v = (frame[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close", "volume"))
-    candles = [{"t": epoch_s(frame.index[i]), "i": i, "o": o[i], "h": h[i], "l": l[i], "c": c[i], "v": None if not np.isfinite(v[i]) else v[i]} for i in range(first, n)]
+    candles = [{"t": epoch_s(frame.index[i]), "i": i, "o": o[i], "h": h[i], "l": l[i], "c": c[i], "v": None if not np.isfinite(v[i]) else v[i], "is_complete": True} for i in range(first, n)]
     from ..config import MULTI_MONTH_TIMEFRAMES
 
     multi = timeframe in MULTI_MONTH_TIMEFRAMES
@@ -226,16 +226,10 @@ def index_chart(
     provider = f"yahoo ({it['intraday_ticker']}, verified against official closes)" if intraday else f"{PROVIDER} (official NSE index history)"
     notes = []
     if timeframe == "1w":
-        notes.append("Weekly candles are aggregated from completed official daily candles (Monday-labelled NSE weeks); the current week appears once it has closed.")
-    partial = None
+        notes.append("Weekly candles are aggregated from completed official daily candles (Monday-labelled NSE weeks); the running week is drawn as an incomplete candle.")
     if multi:
-        from ..data.periods import split_complete
-
-        notes.append("Multi-month candles are aggregated from completed official daily candles; S/R zones are not computed on them. The running period is shown separately as incomplete.")
-        _, part = split_complete(s.indices.frame(it["code"], "1d", cutoff), timeframe, cutoff, s.calendar)
-        if len(part):
-            r = part.iloc[-1]
-            partial = {"t": epoch_s(part.index[-1]), "o": float(r["open"]), "h": float(r["high"]), "l": float(r["low"]), "c": float(r["close"]), "v": float(r["volume"]) if np.isfinite(r["volume"]) else None, "sessions": int(r["source_bars"]), "last_session": r["last_session"].isoformat(), "period_end": None}
+        notes.append("Multi-month candles are aggregated from completed official daily candles; S/R zones are not computed on them. The running period is drawn as an incomplete candle.")
+    partial = index_running_candle(s, it["code"], timeframe, cutoff, frame)
     if it["data_status"] != "ok":
         notes.append(f"Data status {it['data_status']}: {it.get('data_status_reason') or ''}")
     return {
@@ -265,6 +259,30 @@ def index_chart(
         "notes": notes,
         "partial_candle": partial,
     }
+
+
+def index_running_frame(s, code: str, timeframe: str, cutoff, frame):
+    """Running 1W / 1-12 month period of an index from its completed official daily candles."""
+    from ..config import MULTI_MONTH_TIMEFRAMES
+    from ..data.periods import running_period
+
+    if timeframe != "1w" and timeframe not in MULTI_MONTH_TIMEFRAMES:
+        return None
+    try:
+        daily = s.indices.frame(code, "1d", cutoff)
+    except Exception:
+        return None
+    part = running_period(daily, timeframe, cutoff, s.calendar)
+    if part is None or part.empty or (len(frame) and part.index[-1] <= frame.index[-1]):
+        return None
+    return part
+
+
+def index_running_candle(s, code: str, timeframe: str, cutoff, frame) -> dict[str, Any] | None:
+    from ..data.periods import partial_record
+
+    part = index_running_frame(s, code, timeframe, cutoff, frame)
+    return partial_record(part, timeframe, s.calendar) if part is not None else None
 
 
 @router.get("/indices/{code}")

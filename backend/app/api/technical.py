@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any, Literal
 
 import numpy as np
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import and_, select
 
@@ -99,6 +100,26 @@ def load_frame(s: Services, symbol: str, timeframe: str, cutoff, instrument: str
     return symbol, frame
 
 
+def running_frame_for(s: Services, symbol: str, timeframe: str, cutoff, frame, instrument: str = "stock"):
+    """The running 1W / multi-month period (1-row frame) or None - same rows the charts draw."""
+    if instrument == "index":
+        from .indices import index_running_frame
+
+        return index_running_frame(s, symbol, timeframe, cutoff, frame)
+    from ..config import MULTI_MONTH_TIMEFRAMES
+    from ..data.periods import running_period
+
+    if timeframe != "1w" and timeframe not in MULTI_MONTH_TIMEFRAMES:
+        return None
+    raw = s.store.load_current(symbol, "1d")
+    if raw is None or raw.empty:
+        return None
+    part = running_period(prepare_series(raw, symbol, "1d", cutoff, s.calendar).frame, timeframe, cutoff, s.calendar)
+    if part is None or part.empty or (len(frame) and part.index[-1] <= frame.index[-1]):
+        return None
+    return part
+
+
 def _window_start(frame, start_t: int | None, s: Services) -> int:
     times = [epoch_s(t) for t in frame.index]
     if start_t is None:
@@ -149,6 +170,7 @@ def indicators(
     rsi_period: int | None = Query(None, ge=2, le=100),
     atr_period: int | None = Query(None, ge=2, le=100),
     instrument: str = INSTRUMENT,
+    include_partial: bool = Query(False, description="1W / multi-month: also compute the running (incomplete) period; its values are provisional"),
 ) -> dict[str, Any]:
     """EMA / RSI / ATR series aligned with the chart candles from ``start_t``."""
     _check_asof(asof)
@@ -156,6 +178,13 @@ def indicators(
     tcfg = s.tech_cfg
     cutoff, scan = resolve_cutoff(s, timeframe, asof, scan_id)
     symbol, frame = load_frame(s, symbol, timeframe, cutoff, instrument)
+    partial_t = None
+    if include_partial:
+        part = running_frame_for(s, symbol, timeframe, cutoff, frame, instrument)
+        if part is not None:
+            cols = [c for c in ("open", "high", "low", "close", "volume") if c in frame.columns]
+            frame = pd.concat([frame[cols], part[cols]])
+            partial_t = epoch_s(part.index[-1])
     periods = _int_list(ema, 1, 400, "ema") or tcfg.ema_periods
     ser = indicator_series(frame, tcfg, periods, rsi_period, atr_period, cache_key=(instrument, symbol, timeframe, s.store.price_basis))
     start = _window_start(frame, start_t, s)
@@ -188,6 +217,8 @@ def indicators(
             "atr": status(atr, ser["atr_period"]),
         },
         "validated_timeframe": timeframe not in MULTI_MONTH_TIMEFRAMES,
+        "partial_included": partial_t is not None,
+        "partial_t": partial_t,
         "params": {
             "ema_periods": list(periods),
             "ema_seed": tcfg.ema_seed,

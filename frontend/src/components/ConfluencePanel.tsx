@@ -22,6 +22,7 @@ export const COMBO_LABEL: Record<NonNullable<ConfluenceCombo["type"]>, string> =
   breakout_marubozu_volume: "Fresh breakout + Marubozu + volume shock",
   breakout_volume: "Fresh breakout + volume shock",
   breakout_marubozu: "Fresh breakout + Marubozu",
+  marubozu_volume: "Marubozu + volume shock",
 };
 
 export function ScoreCell({ row }: { row: ConfluenceRow }) {

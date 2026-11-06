@@ -107,6 +107,8 @@ class ScanManager:
                         signal_config_hash=config_hash(self.s.signal_cfg),
                         vcp_config_version=self.s.vcp_cfg.version if req.timeframe == "1d" else None,
                         vcp_config_hash=config_hash(self.s.vcp_cfg) if req.timeframe == "1d" else None,
+                        ipo_config_version=self.s.ipo_cfg.version if req.timeframe == "1d" else None,
+                        ipo_config_hash=config_hash(self.s.ipo_cfg) if req.timeframe == "1d" else None,
                         trigger=req.trigger,
                         state="queued",
                         phase="queued",
@@ -161,14 +163,22 @@ class ScanManager:
             conn.execute(update(db.scans).where(db.scans.c.scan_id == scan_id).values(**values))
 
     def _run(self, scan_id: str, req: ScanRequest) -> None:
+        done = False
         try:
             self._execute(scan_id, req)
+            done = True
         except Exception as exc:  # recorded; never propagated to API callers
             log.exception("scan %s failed", scan_id)
             self._update(scan_id, state="failed", phase="failed", finished_at=db.now_ist_iso(), message=f"{type(exc).__name__}: {exc}"[:2000])
         finally:
             with self._lock:
                 self._active.pop(req.key(), None)
+        # Confluence snapshot of the new evidence (persisted; the dashboard never re-runs
+        # scanners). Runs after the scan released its lock, so it never blocks a new scan.
+        if done and req.timeframe in ("1d", "1w"):
+            from .confluence.service import refresh_after_scan
+
+            refresh_after_scan(self.s, req.universe, req.timeframe, req.asof)
 
     def _execute(self, scan_id: str, req: ScanRequest) -> None:
         s = self.s
@@ -229,6 +239,9 @@ class ScanManager:
                 rrg_bench = s.indices.frame(s.index_cfg.rrg_default_benchmark, "1w", cutoff)["close"]
             except Exception as exc:
                 log.warning("scan %s: RRG benchmark %s unavailable: %s", scan_id, s.index_cfg.rrg_default_benchmark, exc)
+        # Sector strength (weekly): each sector index's RRG position vs the RRG benchmark, computed
+        # once per scan from the stored official index history (no downloads).
+        sector_cache: dict[str, Any] = {}
         processed = ok = failed = n_det = 0
         for st in stocks:
             status, err, bars, last_ts, note = "ok", None, 0, None, None
@@ -261,7 +274,7 @@ class ScanManager:
                             log.exception("scan %s: technical analysis for %s failed", scan_id, st.symbol)
                             note = ((note + "; ") if note else "") + f"technical analysis failed: {type(texc).__name__}: {texc}"[:300]
                         try:
-                            self._store_signals(scan_id, st, req.timeframe, ps.frame, dets, tech, stage_res, rrg_bench)
+                            self._store_signals(scan_id, st, req.timeframe, ps.frame, dets, tech, stage_res, rrg_bench, sector_cache, cutoff)
                         except Exception as sexc:  # advanced scanners never fail the pattern scan
                             log.exception("scan %s: signal evidence for %s failed", scan_id, st.symbol)
                             note = ((note + "; ") if note else "") + f"signal scanners failed: {type(sexc).__name__}: {sexc}"[:300]
@@ -288,11 +301,6 @@ class ScanManager:
             detection_count=n_det,
             message=data_msg,
         )
-        # Confluence snapshot of the new evidence (persisted; the dashboard never re-runs scanners).
-        if req.timeframe in ("1d", "1w"):
-            from .confluence.service import refresh_after_scan
-
-            refresh_after_scan(s, req.universe, req.timeframe, req.asof)
 
     def _store_symbol(self, scan_id: str, st: StockInfo, status: str, err: str | None, bars: int, last_ts: str | None, note: str | None) -> None:
         with self.s.engine.begin() as conn:
@@ -395,7 +403,7 @@ class ScanManager:
                 conn.execute(db.tech_signals.insert(), rows)
         return res
 
-    def _store_signals(self, scan_id: str, st: StockInfo, timeframe: str, frame, dets: list[Detection], tech, stage_res, rrg_bench) -> int:
+    def _store_signals(self, scan_id: str, st: StockInfo, timeframe: str, frame, dets: list[Detection], tech, stage_res, rrg_bench, sector_cache: dict[str, Any] | None = None, cutoff=None) -> int:
         """Advanced scanners (fresh breakouts, 52-week, Volume Shocker, VCP) and the
         normalized evidence of every scanner of this scan (docs/confluence-engine.md).
         Existing results (patterns, Marubozu, EMA alignment, Stage, RS) are re-labelled,
@@ -425,6 +433,8 @@ class ScanManager:
         outs = run_signals(frame, timeframe, ser["atr"], ser["ema"].get(20), ser["ema"].get(50), scfg, st.symbol)
         if timeframe == "1d":
             pub.fresh_breakouts(outs.fresh_events, outs.fresh_touches, sv, sh)
+            pub.breakout_setups(outs.setups, sv, sh)
+            self._store_ipo(st, frame, pub)
             pub.week52(outs.w52_events, outs.w52_touches, outs.w52_state, sv, sh)
             self._store_vcp(scan_id, st, frame, ser, pub)
         pub.volume_shocks(outs.shocks, sv, sh)
@@ -442,6 +452,15 @@ class ScanManager:
 
             entry = rrg_entry(st.symbol, frame["close"], rrg_bench, s.index_cfg, s.index_cfg.rrg_trail_weeks)
             pub.rrg(entry, s.index_cfg.rrg_default_benchmark, s.index_cfg.version, config_hash(s.index_cfg))
+            code = s.confluence_cfg.sector_index_map.get(st.industry or "")
+            if code and sector_cache is not None and cutoff is not None:
+                if code not in sector_cache:
+                    try:
+                        close = s.indices.frame(code, "1w", cutoff)["close"]
+                        sector_cache[code] = rrg_entry(code, close, rrg_bench, s.index_cfg, s.index_cfg.rrg_trail_weeks)
+                    except Exception:  # index not in the registry / no data: no sector evidence
+                        sector_cache[code] = None
+                pub.sector(sector_cache[code], code, st.industry, s.index_cfg.rrg_default_benchmark, s.confluence_cfg.version, config_hash(s.confluence_cfg))
         created = db.now_ist_iso()
         seen: set[str] = set()
         rows = []
@@ -484,6 +503,15 @@ class ScanManager:
             with s.engine.begin() as conn:
                 conn.execute(db.signal_evidence.insert(), rows)
         return len(rows)
+
+    def _store_ipo(self, st: StockInfo, frame, pub) -> None:
+        """IPO base state (daily scans; recent listings only), published as evidence."""
+        from .ipo import detect_ipo_base
+
+        listing, _src = self.s.universe.listing_date(st.symbol)
+        res = detect_ipo_base(frame, self.s.ipo_cfg, listing, symbol=st.symbol, config_hash=config_hash(self.s.ipo_cfg), calendar=self.s.calendar)
+        if res is not None:
+            pub.ipo_base(res, self.s.ipo_cfg.version, config_hash(self.s.ipo_cfg))
 
     def _store_vcp(self, scan_id: str, st: StockInfo, frame, ser, pub) -> None:
         """VCP detection (daily scans); implemented in app.vcp (P2)."""
@@ -553,6 +581,11 @@ class ScanManager:
                     "min_volume": c.get("min_volume"),
                     "volume_vs_avg50": c.get("volume_vs_avg50"),
                     "provisional": int(bool(c.get("provisional"))),
+                    "median_volume": c.get("median_volume"),
+                    "volume_vs_prev": c.get("volume_vs_prev"),
+                    "atr_range": c.get("atr_range"),
+                    "recovery_bars": c.get("recovery_bars"),
+                    "final": int(bool(c.get("final"))),
                 }
                 for k, c in enumerate(v.get("contraction_list", []))
             ]

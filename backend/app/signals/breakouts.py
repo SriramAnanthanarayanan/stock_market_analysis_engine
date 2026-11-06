@@ -252,3 +252,174 @@ def week52_state(frame: pd.DataFrame, atr: np.ndarray, cfg: SignalConfig, walks:
         rec["fresh_cross_high"] = bool(walks["bullish"].fresh[i])
         rec["fresh_cross_low"] = bool(walks["bearish"].fresh[i])
     return rec
+
+
+# ------------------------------------------------------------------ about to break out (10-day level)
+SETUP_STATES = ("approaching", "very_near", "touched", "breakout", "confirmed_breakout", "rejected", "expired")
+SETUP_LABELS = {
+    "approaching": "Approaching",
+    "very_near": "Very Near",
+    "touched": "Touched",
+    "breakout": "Breakout",
+    "confirmed_breakout": "Confirmed Breakout",
+    "rejected": "Rejected",
+    "expired": "Expired",
+}
+
+
+def _within(dist_pct: float, dist_atr: float | None, pct: float, atr_k: float, rule: str) -> bool:
+    if not np.isfinite(dist_pct) or dist_pct < 0:
+        return False
+    a_ok = dist_atr is not None and np.isfinite(dist_atr) and dist_atr <= atr_k
+    p_ok = dist_pct <= pct
+    return (p_ok and a_ok) if rule == "both" else (p_ok or a_ok)
+
+
+def _approach_state(cs: CrossingSeries, c: np.ndarray, atr: np.ndarray, i: int, cfg: SignalConfig) -> tuple[str | None, float | None, float | None]:
+    """Approach state of candle ``i`` against its own 10-day level (no event check)."""
+    lvl = float(cs.level[i])
+    if not np.isfinite(lvl) or lvl == 0:
+        return None, None, None
+    a = float(atr[i]) if np.isfinite(atr[i]) and atr[i] > 0 else None
+    dist = cs.sign * (lvl - c[i])  # > 0: still below the high (above the low for breakdowns)
+    dpct = dist / lvl * 100.0
+    datr = dist / a if a else None
+    if bool(cs.beyond[i]):
+        return None, dpct, datr  # a close beyond the level is a breakout (event logic)
+    if bool(cs.touch[i]) or dist < 0:
+        # intraday push through the level (or a close above it inside the buffer)
+        near = dist < 0 or _within(dpct, datr, cfg.very_near_pct, cfg.very_near_atr, cfg.about_to_breakout_rule)
+        return ("touched" if near else "rejected"), dpct, datr
+    if _within(dpct, datr, cfg.very_near_pct, cfg.very_near_atr, cfg.about_to_breakout_rule):
+        return "very_near", dpct, datr
+    if _within(dpct, datr, cfg.about_to_breakout_pct, cfg.about_to_breakout_atr, cfg.about_to_breakout_rule):
+        return "approaching", dpct, datr
+    return None, dpct, datr
+
+
+def breakout_setups(frame: pd.DataFrame, atr: np.ndarray, ema20: np.ndarray | None, ema50: np.ndarray | None, walks: dict[str, CrossingSeries], cfg: SignalConfig) -> list[dict[str, Any]]:
+    """State of the latest completed candle against its 10-day level, per direction:
+    Approaching / Very Near / Touched (before a breakout), Breakout / Confirmed
+    Breakout / Rejected (a recent fresh crossing), Expired (a setup that stopped
+    approaching without breaking out). Uses only candles up to the latest one."""
+    o, h, l, c, v = (frame[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close", "volume"))
+    times = frame.index
+    n = len(c)
+    out: list[dict[str, Any]] = []
+    if n < cfg.fresh_lookback_days + 2:
+        return out
+    i = n - 1
+    for direction, cs in walks.items():
+        bull = direction == "bullish"
+        lvl = float(cs.level[i])
+        if not np.isfinite(lvl):
+            continue
+        state, dpct, datr = _approach_state(cs, c, atr, i, cfg)
+        ep = cs.episodes[-1] if cs.episodes else None
+        age = (i - ep.event) if ep is not None else None
+        event_info = None
+        if ep is not None and age is not None and age <= cfg.setup_expiry_sessions:
+            still = cs.sign * (c[i] - ep.level) > 0
+            c2, _ = confirm_two_closes(cs, c, ep.event)
+            if age == 0:
+                state = "breakout"
+            elif not still and age <= cfg.setup_rejection_sessions:
+                state = "rejected"
+            elif still:
+                state = "confirmed_breakout" if c2 == "confirmed" else "breakout"
+            event_info = {"event_time": iso(times[ep.event]), "event_t": epoch_s(times[ep.event]), "event_age": int(age), "event_level": _r(ep.level), "two_close": c2}
+        if state is None:
+            # Expired: in a setup during the last N sessions, not any more, and no breakout since.
+            since = None
+            for j in range(i - 1, max(cs.first or 0, i - cfg.setup_expiry_sessions) - 1, -1):
+                sj, _, _ = _approach_state(cs, c, atr, j, cfg)
+                if sj in ("approaching", "very_near", "touched"):
+                    since = j
+                    break
+            if since is not None and not (ep is not None and ep.event > since):
+                state = "expired"
+                event_info = {"last_setup_time": iso(times[since]), "sessions_since_setup": int(i - since)}
+        if state is None:
+            continue
+        # consecutive sessions in an approach state up to the latest one
+        run = 0
+        for j in range(i, max(0, i - 60), -1):
+            sj, _, _ = _approach_state(cs, c, atr, j, cfg)
+            if sj in ("approaching", "very_near", "touched"):
+                run += 1
+            else:
+                break
+        a = float(atr[i]) if np.isfinite(atr[i]) else None
+        lo = max(0, i - cfg.fresh_lookback_days)
+        r_hi, r_lo = float(np.max(h[lo:i])), float(np.min(l[lo:i]))
+        e20 = float(ema20[i]) if ema20 is not None and np.isfinite(ema20[i]) else None
+        e50 = float(ema50[i]) if ema50 is not None and np.isfinite(ema50[i]) else None
+        lb = _level_bar(frame, i, cfg.fresh_lookback_days, direction)
+        out.append(
+            {
+                "kind": f"breakout_setup_{state}",
+                "state": state,
+                "state_label": SETUP_LABELS[state],
+                "direction": direction,
+                "level": _r(lvl),
+                "level_kind": f"{cfg.fresh_lookback_days}D high" if bull else f"{cfg.fresh_lookback_days}D low",
+                "level_time": iso(times[lb]),
+                "reference_start": iso(times[i - cfg.fresh_lookback_days]),
+                "reference_end": iso(times[i - 1]),
+                "time": iso(times[i]),
+                "t": epoch_s(times[i]),
+                "close": _r(c[i]),
+                "high": _r(h[i]),
+                "low": _r(l[i]),
+                "distance_pct": _r(dpct, 3),
+                "distance_atr": _r(datr, 3),
+                "atr": _r(a),
+                "ema20": _r(e20),
+                "ema50": _r(e50),
+                "close_vs_ema20_pct": _r((c[i] / e20 - 1.0) * 100.0, 3) if e20 else None,
+                "close_vs_ema50_pct": _r((c[i] / e50 - 1.0) * 100.0, 3) if e50 else None,
+                "ema20_vs_ema50": None if (e20 is None or e50 is None) else ("above" if e20 > e50 else "below"),
+                "volume": None if not np.isfinite(v[i]) else float(v[i]),
+                "volume_ratio": _r(prior_volume_ratio(v, i, cfg.fresh_volume_lookback), 3),
+                "range_10d_pct": _r((r_hi - r_lo) / r_hi * 100.0, 3) if r_hi > 0 else None,
+                "sessions_in_setup": run,
+                "touch": bool(cs.touch[i]),
+                "thresholds": {"approach_pct": cfg.about_to_breakout_pct, "approach_atr": cfg.about_to_breakout_atr, "very_near_pct": cfg.very_near_pct, "very_near_atr": cfg.very_near_atr, "rule": cfg.about_to_breakout_rule},
+                **(event_info or {}),
+            }
+        )
+    return out
+
+
+def setup_quality(m: dict[str, Any], rs: float | None = None, stage: str | None = None, cfg: SignalConfig | None = None) -> tuple[float, list[dict[str, Any]]]:
+    """Explainable 0-100 quality of an about-to-break-out setup (ASSUMPTION weights;
+    not a probability): proximity 30, trend 25, tightness 15, volume 10, RS 10, stage 10.
+    RS / stage come from the latest weekly scan (missing parts are left out)."""
+    cfg = cfg or SignalConfig()
+    bull = m.get("direction") == "bullish"
+    comps: list[dict[str, Any]] = []
+
+    def add(name: str, w: float, score: float | None, raw: Any, formula: str) -> None:
+        if score is not None:
+            comps.append({"name": name, "weight": w, "score": round(float(min(1.0, max(0.0, score))), 4), "raw": raw, "formula": formula})
+
+    st = m.get("state")
+    d = m.get("distance_pct")
+    prox = 1.0 if st in ("touched", "breakout", "confirmed_breakout") else (None if d is None else 1.0 - d / cfg.about_to_breakout_pct)
+    add("proximity", 30, prox, d, f"1 at the level, 0 at {cfg.about_to_breakout_pct} % below it")
+    e20, e50, close = m.get("ema20"), m.get("ema50"), m.get("close")
+    if e20 is not None and e50 is not None and close is not None:
+        parts = [close > e20, close > e50, e20 > e50] if bull else [close < e20, close < e50, e20 < e50]
+        add("trend", 25, sum(parts) / 3.0, m.get("ema20_vs_ema50"), "share of: close beyond EMA20, close beyond EMA50, EMA20 beyond EMA50 (direction of the setup)")
+    rng = m.get("range_10d_pct")
+    add("tightness", 15, None if rng is None else (15.0 - rng) / 10.0, rng, "10-day range: 1 at <= 5 %, 0 at >= 15 % (ASSUMPTION)")
+    vr = m.get("volume_ratio")
+    add("volume", 10, None if vr is None else (vr - 0.5) / 0.7, vr, "volume / 20-day average: 0 at 0.5, 1 at >= 1.2 (ASSUMPTION)")
+    if rs is not None:
+        add("relative_strength", 10, 1.0 if (rs > 0) == bull else 0.0, rs, "RS Line (weekly, rs_line.txt) on the setup's side of zero")
+    if stage is not None:
+        sc = {"stage2_confirmed": 1.0, "early_stage2": 1.0, "stage1": 0.5}.get(stage, 0.0) if bull else (0.0 if stage in ("stage2_confirmed", "early_stage2") else 0.5)
+        add("stage", 10, sc, stage, "your Stage Analysis of the latest weekly scan: Stage 2 -> 1, Stage 1 -> 0.5 (bullish)")
+    tw = sum(x["weight"] for x in comps)
+    q = 100.0 * sum(x["weight"] * x["score"] for x in comps) / tw if tw else 0.0
+    return round(q, 2), comps

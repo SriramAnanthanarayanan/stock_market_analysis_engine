@@ -6,6 +6,8 @@ export type Timeframe = "1h" | "4h" | "1d" | "1w";
 /** Scan timeframes + chart-only multi-month timeframes (see lib/timeframes.ts). */
 export type ChartTf = Timeframe | "1mo" | "3mo" | "6mo" | "12mo";
 
+/** The running (incomplete) 1W / 1-12 month candle, aggregated from completed daily
+ *  candles so far. Display only: detectors and default indicators never use it. */
 export interface PartialCandle {
   t: number;
   o: number;
@@ -13,9 +15,14 @@ export interface PartialCandle {
   l: number;
   c: number;
   v: number | null;
+  is_complete?: false;
+  label?: string;
+  timeframe?: string;
   sessions: number;
+  first_session?: string | null;
   last_session: string | null;
   period_end: string | null;
+  note?: string | null;
 }
 
 export interface Performance {
@@ -209,6 +216,7 @@ export interface Candle {
   l: number;
   c: number;
   v: number | null;
+  is_complete?: boolean; // chart candles are completed candles (true); the running period is partial_candle
 }
 export interface Swing {
   t: number;
@@ -512,6 +520,8 @@ export interface TechMeta {
 
 export interface IndicatorPayload extends TechMeta {
   times: number[];
+  partial_included?: boolean; // the last time is the running (incomplete) period: provisional values
+  partial_t?: number | null;
   ema: Record<string, (number | null)[]>;
   rsi: (number | null)[];
   atr: (number | null)[];

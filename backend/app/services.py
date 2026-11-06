@@ -13,6 +13,7 @@ from .config import (
     DEFAULT_CONFIG,
     DEFAULT_CONFLUENCE_CONFIG,
     DEFAULT_INDEX_CONFIG,
+    DEFAULT_IPO_CONFIG,
     DEFAULT_SIGNAL_CONFIG,
     DEFAULT_STAGE_CONFIG,
     DEFAULT_TECH_CONFIG,
@@ -20,6 +21,7 @@ from .config import (
     ConfluenceConfig,
     DetectionConfig,
     IndexConfig,
+    IPOConfig,
     Settings,
     SignalConfig,
     StageConfig,
@@ -50,6 +52,7 @@ class Services:
         signal_cfg: SignalConfig = DEFAULT_SIGNAL_CONFIG,
         vcp_cfg: VCPConfig = DEFAULT_VCP_CONFIG,
         confluence_cfg: ConfluenceConfig = DEFAULT_CONFLUENCE_CONFIG,
+        ipo_cfg: IPOConfig = DEFAULT_IPO_CONFIG,
     ):
         self.settings = settings
         self.cfg = cfg
@@ -59,6 +62,7 @@ class Services:
         self.signal_cfg = signal_cfg
         self.vcp_cfg = vcp_cfg
         self.confluence_cfg = confluence_cfg
+        self.ipo_cfg = ipo_cfg
         self.started_at = time.time()
         for d in (settings.data_dir, settings.cache_dir):
             d.mkdir(parents=True, exist_ok=True)
@@ -127,6 +131,10 @@ class Services:
     def confluence_config_hash(self) -> str:
         return config_hash(self.confluence_cfg)
 
+    @property
+    def ipo_config_hash(self) -> str:
+        return config_hash(self.ipo_cfg)
+
     # ------------------------------------------------------------ lifecycle
     def startup(self, background: bool = True) -> None:
         version = db.migrate(self.engine)
@@ -137,6 +145,7 @@ class Services:
         register_config(self.engine, self.signal_cfg)
         register_config(self.engine, self.vcp_cfg)
         register_config(self.engine, self.confluence_cfg)
+        register_config(self.engine, self.ipo_cfg)
         interrupted = self.scans.recover()
         log.info("database schema v%s ready (%s); %s interrupted scans marked", version, self.settings.db_path, interrupted)
         if background:

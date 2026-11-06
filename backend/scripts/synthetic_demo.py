@@ -44,7 +44,14 @@ UNIVERSE = [
     ("WALKB", "Synthetic Walk B Ltd.", False),
     ("WALKC", "Synthetic Walk C Ltd.", True),
     ("WALKD", "Synthetic Walk D Ltd.", False),
+    ("VCP4T", "Synthetic Four-Contraction VCP Ltd.", True),
+    ("SETUP10", "Synthetic About-to-Break-Out Ltd.", True),
+    ("IPONEW", "Synthetic IPO Breakout Ltd.", False),
+    ("IPOBASE", "Synthetic IPO Base Ltd.", False),
 ]
+# industries mapped to sector indices of the fixture catalogue (sector-strength evidence)
+INDUSTRY = {"RWALK": "Information Technology", "VCPNEAR": "Metals & Mining", "VCP4T": "Information Technology", "SETUP10": "Metals & Mining"}
+IPO_SYMBOLS = ("IPONEW", "IPOBASE")
 
 
 def _prepend_history(f: pd.DataFrame, cal: NSECalendar, bars: int, seed: int) -> pd.DataFrame:
@@ -77,7 +84,24 @@ def break52(cal: NSECalendar) -> pd.DataFrame:
     return f
 
 
+def setup10(cal: NSECalendar) -> pd.DataFrame:
+    """A walk whose latest candle closes 0.3 % under its previous 10-day high (about to break out)."""
+    f = random_walk(700, cal, seed=41, vol=0.012).copy()
+    i = len(f) - 1
+    hi = float(f["high"].iloc[i - 10 : i].max())
+    o = float(f["close"].iloc[i - 1])
+    c = hi * 0.997
+    f.iloc[i, f.columns.get_loc("open")] = c * 0.996
+    f.iloc[i, f.columns.get_loc("close")] = c
+    f.iloc[i, f.columns.get_loc("high")] = c * 1.0005
+    f.iloc[i, f.columns.get_loc("low")] = c * 0.993
+    return f
+
+
 def frames(cal: NSECalendar) -> dict[tuple[str, str], pd.DataFrame]:
+    from app.synthetic_ipo import IPOSpec, ipo_frame
+
+    four = dict(depths=(28, 15, 8, 4), recover=(0.99, 0.99, 0.99, 0.985), down_bars=(8, 6, 4, 3), up_bars=(8, 6, 5, 4), volumes=(1e5, 0.8e5, 0.6e5, 0.4e5))
     daily = {
         "RWALK": _prepend_history(combo_frame(cal), cal, 900, 1),
         "VCPNEAR": _prepend_history(vcp_frame(VCPSpec(), cal), cal, 900, 2),
@@ -89,6 +113,10 @@ def frames(cal: NSECalendar) -> dict[tuple[str, str], pd.DataFrame]:
         "WALKB": random_walk(1500, cal, seed=32, vol=0.02),
         "WALKC": random_walk(1500, cal, seed=33),
         "WALKD": random_walk(1500, cal, seed=34, vol=0.015),
+        "VCP4T": _prepend_history(vcp_frame(VCPSpec(**four), cal), cal, 900, 6),
+        "SETUP10": setup10(cal),
+        "IPONEW": ipo_frame(IPOSpec(tail=[(125.0, 3.0, 3.0e6)]), cal),
+        "IPOBASE": ipo_frame(IPOSpec(tail=[(118.5, 1.0, 0.5e6), (119.0, 1.0, 0.5e6)]), cal),
     }
     out: dict[tuple[str, str], pd.DataFrame] = {}
     for sym, d in daily.items():
@@ -100,7 +128,7 @@ def frames(cal: NSECalendar) -> dict[tuple[str, str], pd.DataFrame]:
 
 
 def universe_csv() -> tuple[str, str]:
-    lines = ["Company Name,Industry,Symbol,Series,ISIN Code"] + [f"{c},Synthetic,{s},EQ,INE{i:09d}" for i, (s, c, _) in enumerate(UNIVERSE)]
+    lines = ["Company Name,Industry,Symbol,Series,ISIN Code"] + [f"{c},{INDUSTRY.get(s, 'Synthetic')},{s},EQ,INE{i:09d}" for i, (s, c, _) in enumerate(UNIVERSE)]
     fno = ["UNDERLYING                          ,SYMBOL    ,NOV-26     ,DEC-26     ,JAN-27", "Derivatives on Individual Securities,Symbol    ,NOV-26     ,DEC-26     ,JAN-27"]
     fno += [f"{c.upper():36},{s:10},500        ,500        ,500" for s, c, f in UNIVERSE if f]
     return "\n".join(lines) + "\n", "\n".join(fno) + "\n"
@@ -128,6 +156,10 @@ def main() -> None:
         if not s.universe.has_snapshot("nifty500"):
             s.universe.refresh_nifty500(text=nifty, source="synthetic-demo")
             s.universe.refresh_fno(text=fno, source="synthetic-demo")
+        # official listing dates of the two synthetic IPOs (the NSE equity list format)
+        fr = frames(cal)
+        eq = "SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING\n" + "".join(f"{sym},{sym} Ltd,EQ,{fr[(sym, '1d')].index[0].strftime('%d-%b-%Y').upper()}\n" for sym in IPO_SYMBOLS)
+        s.universe.refresh_listing_dates(text=eq, source="synthetic-demo", min_rows=1)
         s.indices.refresh_catalogue(catalogue(cal), min_rows=5)
         s.indices.refresh_all()
         from app.scanner import ScanRequest

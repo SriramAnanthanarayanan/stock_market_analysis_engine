@@ -36,6 +36,17 @@ export interface ChartDebugInfo {
   visibleFrom: number | null;
   visibleTo: number | null;
   partialCandle: boolean;
+  partialMarker: boolean;
+  partialT: number | null;
+  // improvement task: chart type, line data, drawings' pixel positions, volume highlights
+  chartType: "candle" | "line";
+  linePoints: number;
+  lineFirst: { t: number; v: number } | null;
+  lineLast: { t: number; v: number } | null;
+  volumeHighlights: number;
+  overlayKinds: Record<string, number>;
+  /** Pixel position of every drawing anchor (id -> [x, y][]) through the drawing layer's mapper. */
+  anchorPixels: () => Record<string, (number | null)[][]>;
 }
 
 export const chartDebug: ChartDebugInfo = {
@@ -72,6 +83,15 @@ export const chartDebug: ChartDebugInfo = {
   visibleFrom: null,
   visibleTo: null,
   partialCandle: false,
+  partialMarker: false,
+  partialT: null,
+  chartType: "candle",
+  linePoints: 0,
+  lineFirst: null,
+  lineLast: null,
+  volumeHighlights: 0,
+  overlayKinds: {},
+  anchorPixels: () => ({}),
 };
 
 declare global {

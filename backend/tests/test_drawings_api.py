@@ -157,3 +157,73 @@ def test_templates_global_and_symbol(client_env):
     assert {t["template_id"] for t in client.get("/api/drawing-templates", params={"symbol": "ATRI"}).json()["items"]} == {"tplGlob1"}
     assert client.delete("/api/drawing-templates/tplSym01").status_code == 204
     assert client.delete("/api/drawing-templates/tplSym01").status_code == 404
+
+
+# ------------------------------------------------------------------ users, creating timeframe, annotations
+def test_drawings_are_stored_per_user_symbol_and_timeframe(client_env):
+    client, _, _, _ = client_env
+    A, B = {"X-PAS-User": "alice"}, {"X-PAS-User": "bob"}
+    body = {**fib("userA001"), "drawing_type": "trend", "settings": None, "created_timeframe": "1w"}
+    r = client.post("/api/drawings", json=body, headers=A)
+    assert r.status_code == 201 and r.json()["owner"] == "alice" and r.json()["created_timeframe"] == "1w"
+    assert client.get("/api/drawings", params={"symbol": "RWALK"}, headers=B).json()["count"] == 0
+    assert client.get("/api/drawings", params={"symbol": "RWALK"}).json()["owner"] == "local"  # no header: the local user
+    mine = client.get("/api/drawings", params={"symbol": "RWALK"}, headers=A).json()
+    assert [x["drawing_id"] for x in mine["items"]] == ["userA001"]
+    # another user can neither change nor delete it
+    assert client.put("/api/drawings/userA001", json={**body, "base_version": 1, "color": "#ff00ff"}, headers=B).status_code == 404
+    assert client.delete("/api/drawings/userA001", params={"version": 1}, headers=B).status_code == 404
+    # an update without created_timeframe keeps the timeframe it was drawn on
+    upd = {k: v for k, v in body.items() if k != "created_timeframe"}
+    r2 = client.put("/api/drawings/userA001", json={**upd, "base_version": 1, "color": "#ff00ff"}, headers=A)
+    assert r2.status_code == 200 and r2.json()["created_timeframe"] == "1w" and r2.json()["color"] == "#ff00ff"
+    assert client.get("/api/drawings", params={"symbol": "RWALK"}, headers={"X-PAS-User": "bad user!"}).status_code == 422
+    exp = client.get("/api/drawings/export", headers=A).json()
+    assert {d["owner"] for d in exp["drawings"]} == {"alice"}
+    assert client.post("/api/drawings", json={**body, "drawing_id": "badTF001", "created_timeframe": "2d"}, headers=A).status_code == 422
+
+
+def test_text_annotation_persists(client_env):
+    client, _, _, _ = client_env
+    note = {**fib("note0001"), "drawing_type": "text", "anchors": [{"t": 1767000000, "p": 1010.0}], "settings": None, "style": {"label": "Results on 12-Nov"}}
+    r = client.post("/api/drawings", json=note)
+    assert r.status_code == 201 and r.json()["style"]["label"] == "Results on 12-Nov"
+    again = client.get("/api/drawings", params={"symbol": "RWALK"}).json()["items"]
+    assert [x for x in again if x["drawing_id"] == "note0001"][0]["drawing_type"] == "text"
+    blank = client.post("/api/drawings", json={**note, "drawing_id": "note0002", "style": {}}).json()
+    assert blank["style"]["label"] == "Note"
+    assert client.post("/api/drawings", json={**note, "drawing_id": "note0003", "anchors": note["anchors"] * 2}).status_code == 422
+    assert client.post("/api/drawings", json={**note, "drawing_id": "note0004", "style": {"label": "x" * 301}}).status_code == 422
+
+
+def test_migration_assigns_existing_drawings_to_the_local_user(tmp_path):
+    from sqlalchemy import text
+
+    from app import database as db
+
+    eng = db.make_engine(tmp_path / "m.db")
+    with eng.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at VARCHAR NOT NULL, description VARCHAR)")
+        for v, desc, fn in db.MIGRATIONS[:8]:
+            fn(conn)
+            conn.exec_driver_sql("INSERT INTO schema_version VALUES (?, ?, ?)", (v, "2026-11-04T00:00:00+05:30", desc))
+        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(chart_drawings)")}
+        if "owner" in cols:  # metadata already carries migration-9 columns on a fresh create; simulate the old table
+            conn.exec_driver_sql("DROP TABLE chart_drawings")
+            conn.exec_driver_sql("CREATE TABLE chart_drawings (drawing_id VARCHAR PRIMARY KEY, instrument VARCHAR NOT NULL, symbol VARCHAR NOT NULL, drawing_type VARCHAR NOT NULL, anchors_json TEXT NOT NULL, color VARCHAR NOT NULL, line_style VARCHAR NOT NULL, line_width INTEGER NOT NULL, style_json TEXT, settings_json TEXT, visible INTEGER NOT NULL, timeframes_json TEXT, created_at VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, version INTEGER NOT NULL, origin VARCHAR)")
+        conn.exec_driver_sql("INSERT INTO chart_drawings VALUES ('old00001','stock','ITC','hline','[{\"t\":1,\"p\":5}]','#19C3DA','solid',2,'{}',NULL,1,NULL,'x','x',3,'ui')")
+    assert db.migrate(eng) == db.SCHEMA_VERSION
+    with eng.connect() as conn:
+        row = conn.execute(text("SELECT owner, created_timeframe, version, symbol FROM chart_drawings WHERE drawing_id='old00001'")).one()
+    assert tuple(row) == ("local", None, 3, "ITC")  # nothing rewritten except the new columns' defaults
+
+
+def test_owner_in_the_body_is_ignored(client_env):
+    client, _, _, _ = client_env
+    body = {**fib("ownerX01"), "drawing_type": "hline", "anchors": [{"t": 1767000000, "p": 1000}], "settings": None, "owner": "mallory"}
+    r = client.post("/api/drawings", json=body, headers={"X-PAS-User": "alice"})
+    assert r.status_code == 201 and r.json()["owner"] == "alice"  # the request's user decides, never the payload
+    echoed = {**r.json(), "base_version": 1}
+    for k in ("version", "created_at", "updated_at", "origin"):
+        echoed.pop(k)
+    assert client.put("/api/drawings/ownerX01", json=echoed, headers={"X-PAS-User": "alice"}).status_code == 200

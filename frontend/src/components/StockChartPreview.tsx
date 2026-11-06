@@ -134,9 +134,10 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
   const firstT = candles[0]?.t ?? null;
   const lastT = last?.t ?? null;
   const vcp = term.vcp;
-  const shapes = useMemo(() => [...contextShapes(req, firstT, lastT), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes], [req, firstT, lastT, term.stageOverlay, term.vcpOverlay]);
-  const markers = useMemo(() => [...contextMarkers(req), ...term.vcpOverlay.markers], [req, term.vcpOverlay]);
-  const focusT = vcp?.vcp?.geometry?.base.t_start ?? req.context?.focusT ?? req.context?.markers?.[0]?.t ?? null;
+  const shapes = useMemo(() => [...contextShapes(req, firstT, lastT), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes], [req, firstT, lastT, term.stageOverlay, term.vcpOverlay, term.ipoOverlay]);
+  const markers = useMemo(() => [...contextMarkers(req), ...term.vcpOverlay.markers, ...term.ipoOverlay.markers], [req, term.vcpOverlay, term.ipoOverlay]);
+  const volumeHighlights = useMemo(() => [...term.vcpOverlay.volume, ...term.ipoOverlay.volume], [term.vcpOverlay, term.ipoOverlay]);
+  const focusT = vcp?.vcp?.geometry?.base.t_start ?? term.ipo?.geometry?.listing.t ?? req.context?.focusT ?? req.context?.markers?.[0]?.t ?? null;
   const name = loaded?.kind === "index" ? loaded.data.name : loaded?.kind === "stock" ? loaded.data.company : null;
   const zones = data?.sr_zones ?? [];
   const perf = loaded?.kind === "stock" ? loaded.data.performance : null;
@@ -197,6 +198,14 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
               S/R
             </button>
           )}
+          <button
+            className={`chip h-6 ${term.prefs.chartType === "line" ? "chip-on" : ""}`}
+            onClick={() => term.setPrefs({ ...term.prefs, chartType: term.prefs.chartType === "line" ? "candle" : "line" })}
+            title="Candlesticks or a line of closing prices (same data, overlays and drawings)"
+            data-testid="preview-chart-type"
+          >
+            {term.prefs.chartType === "line" ? "Line" : "Candles"}
+          </button>
           <button className={`chip h-6 ${term.prefs.logScale ? "chip-on" : ""}`} onClick={() => term.setPrefs({ ...term.prefs, logScale: !term.prefs.logScale })}>
             Log
           </button>
@@ -278,6 +287,7 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
               extraPanes={term.extraPanes}
               overlayLines={term.stageOverlay.lines}
               partialCandle={partial}
+              volumeHighlights={volumeHighlights}
               focusT={focusT}
               height="h-[58vh] min-h-[360px]"
             />
@@ -295,7 +305,8 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
                 <KV k="Formation" v={`${fmtBarTime(det.formation_start, det.timeframe)} - ${fmtBarTime(det.formation_end, det.timeframe)}`} />
               </>
             )}
-            {vcp?.vcp && <KV k="VCP" v={`${vcp.vcp.status_label} · pivot ${fmtNum(vcp.vcp.pivot)}`} />}
+            {vcp?.vcp && <KV k="VCP" v={`${vcp.vcp.status_label} · ${vcp.vcp.depths_pct.map((d, i) => `T${i + 1} ${d.toFixed(0)}%`).join(" > ")} · pivot ${fmtNum(vcp.vcp.pivot)}`} />}
+            {term.ipo && <KV k="IPO base" v={`${term.ipo.status_label}${term.ipo.pivot ? ` · pivot ${fmtNum(term.ipo.pivot)}` : ""} · listed ${term.ipo.listing.date}`} />}
             {partial && <KV k="Running period (incomplete)" v={`${partial.sessions} sessions to ${fmtBarTime(partial.last_session, "1d")}`} />}
           </section>
           <section className="panel p-3 text-[11px]">

@@ -4,7 +4,7 @@ A personal market-analysis application for NSE-listed stocks. It finds predefine
 
 It is **not** a trading system, an advisory service or a signal generator. A pattern's *quality* is a geometric fit score, not a probability of success.
 
-> **Phase status: P1-P3, E1-E3 and the advanced phases A1-A4 are implemented.** All 17 patterns, support/resistance zones, cross-scan pattern tracking, chart labelling, exports and the precision/recall evaluation tooling exist. **No label has been created yet, so real-chart precision and recall are unknown** - every threshold is still an initial default.
+> **Phase status: P1-P3, E1-E3, the advanced phases A1-A4 and the A5 improvements are implemented.** All 17 patterns, support/resistance zones, cross-scan pattern tracking, chart labelling, exports and the precision/recall evaluation tooling exist. **No label has been created yet, so real-chart precision and recall are unknown** - every threshold is still an initial default.
 
 | Phase | Scope | State |
 |---|---|---|
@@ -15,9 +15,10 @@ It is **not** a trading system, an advisory service or a signal generator. A pat
 | E2 | NSE index registry (official catalogue, 139 indices), official index history, Index Analysis, Index Explorer, Relative Rotation Graph | **Done** |
 | E3 | Stage Analysis + RS Line translated from `stage_analysis.txt` / `rs_line.txt` (stocks and indices), Stage Analysis page, chart overlays | **Done** |
 | A1 | Fresh / first-time 10-day breakouts (event IDs, first in lookback, re-arm), Volume Shocker (RVOL, percentile, intraday same time-of-day), 52-week high breakouts / low breakdowns, normalized signal evidence | **Done** |
-| A2 | Minervini-style VCP detector (contractions, pivot, statuses, explainable score, chart geometry), VCP scanner with Stage Analysis as separate context | **Done** (synthetic tests; not validated on labelled real charts) |
+| A2 | Minervini-style VCP detector (contractions, pivot, statuses, explainable score, chart geometry), VCP scanner with Stage Analysis as separate context (rebuilt as detector v2 in A5) | **Done** (synthetic tests; not validated on labelled real charts) |
 | A3 | Universal chart preview from every table + fullscreen terminal, 1 / 3 / 6 / 12-month candles, 1/3/6/12-month performance, TradingView-style Fibonacci retracement / extension, drawings stored in the database (autosave, versions, tabs, backup) | **Done** |
 | A4 | Confluence Dashboard: five-category explainable score from stored evidence, no double counting, freshness, coverage, same-session breakout + Marubozu + volume bonus, bearish separately, nine screens | **Done** |
+| A5 | Improvements: candlestick / line chart switch, running (incomplete) 1W / multi-month candle, VCP detector v2 (successive contractions T1 > T2 > ... -> pivot, drawn as a structure), IPO Base Breakout scanner, 10-day About to Break Out states, confluence 1.1 (setups, IPO base, dry-up, sector strength), drawings per user + text notes | **Done** (synthetic data only; VCP / IPO base not validated on labelled real charts) |
 
 Patterns: Falling / Rising / Horizontal Channel, Rectangle, Ascending / Descending / Symmetrical Triangle, Falling / Rising Wedge (P1); Bullish / Bearish Flag, Bullish / Bearish Pennant, Double Top / Bottom, Head & Shoulders, Inverse Head & Shoulders (P2). Support/resistance zones are a shared feature shown in the Explorer.
 
@@ -71,6 +72,7 @@ backend/
     synthetic.py       deterministic synthetic fixtures (tests / self-test)
     synthetic_p2.py    fixtures for flags, pennants, doubles, H&S, S/R
     synthetic_vcp.py   VCP fixtures (tests / self-test / offline demo)
+    synthetic_ipo.py   IPO base fixtures (tests / self-test / offline demo)
     api/               routes.py, chart.py (Pattern Explorer payload), p3.py (tracks, outcomes, labels, evaluation, exports)
     data/              calendar.py, universe.py, ohlcv.py (hygiene, 4H, completion), store.py (cache + refresh)
     providers/         base.py (interface), yahoo.py
@@ -86,11 +88,12 @@ backend/
     api/               technical.py, indices.py, stage.py (E1-E3 endpoints)
     analytics/         sr.py (support/resistance zones), outcomes.py (post-breakout returns, MFE, MAE)
     signals/           crossing.py, breakouts.py (fresh 10-day, 52-week), volume.py (Volume Shocker), evidence.py (normalized evidence), nse52w.py
-    vcp/               detector.py (VCP)
+    vcp/               detector.py (VCP v2)
+    ipo/               detector.py (IPO base breakout)
     confluence/        engine.py (score), service.py (snapshots, screens)
     drawings.py        chart drawings in the database (versions, history, export / import, templates)
     data/periods.py    1 / 3 / 6 / 12-month candles from completed daily candles
-    api/               signals.py, vcp.py, confluence.py, drawings.py (A1-A4 endpoints)
+    api/               signals.py, vcp.py, ipo.py, confluence.py, drawings.py (A1-A5 endpoints)
     evaluation/        labels.py (label validation, dataset split), engine.py (matching, metrics, compare, sweep)
   data/                screener.db, nifty500.csv, nse_fno.csv, nse_holidays.json
   cache/               ohlcv/<interval>/<SYMBOL>.csv, yfinance tz cache
@@ -98,21 +101,24 @@ backend/
   scripts/synthetic_demo.py  offline demo server with SYNTHETIC data (UI checks without network access)
 frontend/
   src/api              typed client mirroring backend models
-  src/charts           PatternChart.tsx, OverlayPrimitive.ts, debug.ts, fib.ts, drawings.ts, vcpOverlay.ts, useChartTerminal.ts
+  src/charts           PatternChart.tsx, OverlayPrimitive.ts, debug.ts, fib.ts, drawings.ts, vcpOverlay.ts (VCP + IPO base), lineData.ts, useChartTerminal.ts
   src/components       scan controls, overview, filters/table, badges, LabelPanel.tsx
   src/pages            Dashboard.tsx, Explorer.tsx, History.tsx, Evaluation.tsx, CandlestickScanner.tsx, BreakoutScanner.tsx,
                        IndicatorScanner.tsx, IndexAnalysis.tsx, IndexExplorer.tsx, RRG.tsx, StageAnalysis.tsx,
-                       FreshBreakoutScanner.tsx, Week52Scanner.tsx, VolumeShocker.tsx, VcpScanner.tsx, ConfluenceDashboard.tsx
+                       FreshBreakoutScanner.tsx, AboutToBreakout.tsx, Week52Scanner.tsx, VolumeShocker.tsx, VcpScanner.tsx, IpoBaseScanner.tsx,
+                       ConfluenceDashboard.tsx
   src/components       StockChartPreview.tsx (preview drawer + fullscreen), DrawingSettingsPanel.tsx, VcpPanel.tsx, ConfluencePanel.tsx
   src/lib              drawingStore.ts (autosave, conflicts, tabs), openChart.tsx, timeframes.ts
   scripts/verify-ui.mjs  automated UI verification against the running app (scanner + Explorer)
   scripts/verify-p3.mjs  automated UI verification of labelling, evaluation and history
   scripts/verify-advanced.mjs  UI verification of A1-A4 (scanners, preview, multi-month, Fibonacci, drawing persistence, confluence)
-  tests/               unit tests (npm test): Fibonacci level maths
+  scripts/verify-improvements.mjs  UI verification of A5 (line chart, running candles, VCP v2, IPO base, About to Break Out, confluence, drawings)
+  tests/               unit tests (npm test): Fibonacci level maths, line-chart data
 docs/                  pattern-rules.md, data-sources.md, validation.md, implementation-notes.md, indicators.md, marubozu-breakout.md,
                        charting-tools.md, rrg.md, index-universe.md, stage-analysis-implementation.md, advanced-features-audit.md,
                        first-time-breakout.md, volume-shocker.md, 52-week-breakouts.md, vcp-methodology.md, confluence-engine.md,
-                       chart-preview.md, multi-month-timeframes.md, fibonacci-tools.md, chart-drawing-persistence.md
+                       chart-preview.md, multi-month-timeframes.md, fibonacci-tools.md, chart-drawing-persistence.md,
+                       about-to-breakout.md, ipo-base.md
 ```
 
 ---
@@ -242,18 +248,23 @@ Details: `docs/index-universe.md`, `docs/rrg.md`.
 * **Fresh Breakouts** (`/fresh-breakouts`): a close beyond the previous 10 completed daily candles' high / low (current candle excluded) by 0.1 x ATR(14), counted only when it is a **fresh crossing** (the previous candle was inside its own window) and not caused by an old high rolling out; "First Breakout in Lookback" (none in the previous 20 sessions), unique event IDs, re-arm after 3 closes back inside, intraday touch vs daily close vs 1- / 2-close confirmation. `docs/first-time-breakout.md`.
 * **Volume Shocker** (`/volume-shocker`): RVOL vs the previous 20 completed candles (intraday: the same time-of-day candle of the previous sessions; partial days are never compared), median / max / 60-candle percentile / z-score / traded value / RVOL 50, thresholds 1.5 / 2 / 3 / 5x, optional >= P90 condition, bullish / bearish / neutral classification, liquidity filter. `docs/volume-shocker.md`.
 * **52-Week Breakouts** (`/52-week`): previous 252 completed sessions (current excluded), close vs intraday touch, raw basis only, `INSUFFICIENT_HISTORY` instead of guesses. `docs/52-week-breakouts.md`.
-* **VCP Scanner** (`/vcp`): Volatility Contraction Patterns (T1 > T2 > ..., ratio <= 0.75, 15-65 session base, volume dry-up, pivot = final contraction high, statuses Developing ... Breakout / Failed / Invalidated, 30/25/20/15/10 explainable score); Stage Analysis shown as separate context. Source principles vs engineering thresholds: `docs/vcp-methodology.md`.
+* **About to Break Out** (`/about-to-breakout`): stocks closing just below their previous 10-day high **before** the breakout - Approaching (within 2 % and 0.5 ATR), Very Near, Touched - and what happened to recent ones (Breakout, Confirmed Breakout, Rejected, Expired); distance %, distance ATR, EMA 20 / 50, volume ratio, RS, Stage, explainable setup quality. The 10-day breakout rule is unchanged. `docs/about-to-breakout.md`.
+* **VCP Scanner** (`/vcp`): VCP detector v2 - successive contractions T1 > T2 > ... (2-6, each >= 3 % and <= 0.75 x the previous) inside an uptrend, final contraction <= 10 % on dried-up volume (<= 0.70 x the 50-day average), pivot = final contraction high, breakout on >= 1.5x volume; states Developing, Forming, Final Contraction, Near Pivot, Breakout, Failed Breakout, Invalidated; per-contraction metrics; 30/20/20/10/10/10 explainable score; drawn as a contraction structure (legs, swing points, depths, pivot, dry-up), never a box. Stage Analysis shown as separate context. Methodology vs engineering thresholds: `docs/vcp-methodology.md`.
+* **IPO Base Breakout** (`/ipo-base`): recent listings (official NSE listing date) through price discovery -> settled volatility -> first post-listing base -> pivot -> breakout on volume; states Too Young, Discovery Phase, Base Forming, Base Validated, Near Pivot, Breakout, Failed Breakout, Invalidated; not an IPO-launch scanner and not a VCP. `docs/ipo-base.md`.
 * **Chart preview**: a symbol click in any results table opens a preview drawer (the page, its filters, pagination and scroll stay); **Expand** opens the full terminal, **Esc** closes. `docs/chart-preview.md`.
-* **1 / 3 / 6 / 12-month candles** built from completed daily candles on NSE sessions (the running period is shown separately and flagged), 1 / 3 / 6 / 12-month performance; detectors declare their supported timeframes. `docs/multi-month-timeframes.md`.
+* **1 / 3 / 6 / 12-month candles** built from completed daily candles on NSE sessions, 1 / 3 / 6 / 12-month performance; detectors declare their supported timeframes. The **running (incomplete) 1W / multi-month candle** is always shown grey and labelled INCOMPLETE (`is_complete: false`; same latest price as the daily chart); detection never uses it, indicators only on request. `docs/multi-month-timeframes.md`.
+* **Line chart**: Candles / Line switch in the terminal and the preview (line of closes; volume, indicators, overlays, drawings, crosshair, zoom and fullscreen unchanged). `docs/charting-tools.md`.
 * **Fibonacci** retracement and trend-based extension (TradingView formulas, linear / log, levels, colours, labels, extend, templates). `docs/fibonacci-tools.md`.
-* **Drawings in the database**: symbol-level, shown on every timeframe unless restricted, autosave, version conflicts across tabs (409, newer kept), history, export / import, one-time import of old browser drawings. `docs/chart-drawing-persistence.md`.
-* **Confluence Dashboard** (`/confluence`): ranks stocks by a five-category score (trend 20, setup 25, trigger 20, volume + candlestick 25, relative strength 10) computed from the stored scanner evidence - correlated evidence capped, stale and invalidated evidence never scored, unavailable categories reported as coverage, same-session fresh breakout + Marubozu + volume shock bonus (up to 10 points), bearish scored separately, nine predefined screens, evidence breakdown per stock. Not a probability. `docs/confluence-engine.md`.
+* **Drawings in the database**: per user + symbol (+ creating timeframe), shown on every timeframe unless restricted, text annotations, autosave, version conflicts across tabs (409, newer kept), history, export / import, one-time import of old browser drawings. `docs/chart-drawing-persistence.md`.
+* **Confluence Dashboard** (`/confluence`): ranks stocks by a five-category score (trend 20, setup 25, trigger 20, volume + candlestick 25, relative strength 10) computed from the stored scanner evidence - correlated evidence capped, stale and invalidated evidence never scored, unavailable categories reported as coverage, same-session fresh breakout + Marubozu + volume shock bonus (up to 10 points), about-to-break-out states, IPO base, volume dry-up and sector index strength as capped evidence, bearish scored separately, eleven predefined screens, evidence breakdown per stock. Not a probability. `docs/confluence-engine.md`.
 
 ```powershell
 curl.exe "http://127.0.0.1:8031/api/scan/fresh-breakouts?first_only=true"
 curl.exe "http://127.0.0.1:8031/api/scan/volume-shocks?min_rvol=2"
 curl.exe "http://127.0.0.1:8031/api/scan/52week?direction=bullish"
 curl.exe "http://127.0.0.1:8031/api/scan/vcp?status=near_pivot"
+curl.exe "http://127.0.0.1:8031/api/scan/breakout-setups?state=very_near,touched"
+curl.exe "http://127.0.0.1:8031/api/scan/ipo-base?status=near_pivot,breakout"
 curl.exe "http://127.0.0.1:8031/api/confluence?screen=breakout_marubozu_volume"
 curl.exe "http://127.0.0.1:8031/api/chart?symbol=ITC&timeframe=3mo"
 ```
@@ -300,12 +311,12 @@ curl.exe http://127.0.0.1:8031/api/evaluation/runs
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m app.selftest        # 117 checks: engine formulas, 4 cases x 17 patterns, Forming, precedence, S/R, regressions, E1 indicator references, A1-A4 checks
-.\.venv\Scripts\python.exe -m pytest              # 499 tests, offline (fixture provider)
+.\.venv\Scripts\python.exe -m app.selftest        # 120 checks: engine formulas, 4 cases x 17 patterns, Forming, precedence, S/R, regressions, E1 indicator references, A1-A5 checks
+.\.venv\Scripts\python.exe -m pytest              # 547 tests, offline (fixture provider)
 
 cd ..\frontend
 npm run build                                     # strict TypeScript check + production bundle
-npm test                                          # unit tests (Fibonacci level maths)
+npm test                                          # 13 unit tests (Fibonacci level maths, line-chart data)
 node scripts/verify-ui.mjs ui-screenshots         # needs backend + frontend running and a completed 1D scan
 node scripts/verify-p3.mjs ui-screenshots         # labelling, evaluation, compare, sweep, history (creates labels/runs in the live DB)
 node scripts/verify-e1.mjs ui-screenshots         # scanners, indicators, panes, overlays, drawing tools (needs 1D + 1H scans)
@@ -313,11 +324,13 @@ node scripts/verify-e2.mjs ui-screenshots         # index analysis, index explor
 node scripts/verify-e3.mjs ui-screenshots         # Stage Analysis page, RS Line pane, weekly Stage overlays (needs a 1W scan)
 node scripts/verify-advanced.mjs ui-screenshots   # A1-A4: new scanners, chart preview, 1-12 month candles, Fibonacci, database drawings, Confluence Dashboard (needs 1D + 1W scans)
 node scripts/verify-advanced.mjs ui-screenshots --after-restart   # run after restarting the backend: the drawings of the first run survived
+node scripts/verify-improvements.mjs ui-screenshots   # A5: line chart, running candles, VCP v2, IPO base, About to Break Out, confluence, drawings (needs 1D + 1W scans)
+node scripts/verify-improvements.mjs ui-screenshots --after-restart   # after restarting the backend: drawings, text note, line mode survived
 ```
 
-`verify-advanced.mjs` creates drawings and a template in the database and removes them again (the restart check keeps two Fibonacci drawings until `--after-restart` removes them). The UI scripts use Edge/Chrome, or `PW_EXECUTABLE=<path to chromium>`.
+`verify-advanced.mjs` and `verify-improvements.mjs` create drawings (and a template) in the database and remove them again (their restart checks keep a few drawings until `--after-restart` removes them). The UI scripts use Edge/Chrome, or `PW_EXECUTABLE=<path to chromium>`.
 
-**Offline demo** (no Yahoo / NSE access): `.\.venv\Scripts\python.exe scripts\synthetic_demo.py --port 8031 --data-dir <dir>` serves SYNTHETIC data for 10 symbols (VCP breakout with a same-session Marubozu + volume shock, a VCP near its pivot, a 52-week breakout, the line patterns, random walks) and runs 1W, 1D and 1H scans at start. Then `npm run build; npx vite preview --port 5191 --strictPort`. `verify-advanced.mjs` passes there; the older suites need live-size data for some checks (`verify-e1.mjs` accepts `E1_SYMBOL=RWALK E1_MIN_UNIVERSE=5`).
+**Offline demo** (no Yahoo / NSE access): `.\.venv\Scripts\python.exe scripts\synthetic_demo.py --port 8031 --data-dir <dir>` serves SYNTHETIC data for 14 symbols (VCP breakout with a same-session Marubozu + volume shock, a VCP near its pivot, a four-contraction VCP, a stock about to break out of its 10-day high, two IPO listings, a 52-week breakout, the line patterns, random walks) and runs 1W, 1D and 1H scans at start. Then `npm run build; npx vite preview --port 5191 --strictPort`. `verify-advanced.mjs` and `verify-improvements.mjs` pass there; the older suites need live-size data for some checks (`verify-e1.mjs` accepts `E1_SYMBOL=RWALK E1_MIN_UNIVERSE=5`).
 
 `verify-p3.mjs` writes two test labels and three evaluation runs into the live database (runs are an append-only record); delete the test labels afterwards (label panel in the Explorer, or `curl.exe -X DELETE http://127.0.0.1:8031/api/labels/<id>`).
 
@@ -373,6 +386,7 @@ Details: `docs/data-sources.md`.
 * Tracks start with P3 (no back-fill of earlier scans). Historical as-of scans and pattern-filtered scans are snapshots and do not update tracks. If the provider revises candles inside a frozen formation, the track is closed as `data_changed` instead of being re-fitted.
 * Outcome statistics are descriptive (small samples, survivorship bias, adjusted prices) and are not success rates.
 * Real-chart precision and recall are **unknown** until you create labels; the evaluation tooling reports nothing meaningful before that.
+* The A5 additions (VCP detector v2, IPO base, About to Break Out, confluence 1.1 weights, the industry -> sector index map) use engineering defaults and were built and UI-checked on **synthetic** data only (the build session had no Yahoo / NSE access); run a live 1D + 1W scan and review real charts before relying on them. IPO bases need the official NSE listing dates (refreshed with the universe).
 
 ## Where to continue
 

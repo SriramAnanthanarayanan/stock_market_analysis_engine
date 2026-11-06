@@ -3,6 +3,7 @@ import type { DrawStyle, DrawTool } from "../charts/useDrawingTools";
 import type { Drawing } from "../charts/drawings";
 import type { SaveState } from "../lib/drawingStore";
 import { DEFAULT_EMAS, DEFAULT_PREFS, newId, type ChartPrefs } from "../lib/prefs";
+import { drawingUser, setDrawingUser } from "../api/advanced";
 import { DrawingSettingsPanel } from "./DrawingSettingsPanel";
 
 const TOOLS: { id: DrawTool; label: string; title: string }[] = [
@@ -16,6 +17,7 @@ const TOOLS: { id: DrawTool; label: string; title: string }[] = [
   { id: "vline", label: "V-line", title: "Vertical line (one click)" },
   { id: "fib_retracement", label: "Fib", title: "Fibonacci retracement: click the start (P1) and end (P2) of the move; 0 at P2, 1 at P1" },
   { id: "fib_extension", label: "Fib ext", title: "Trend-based Fibonacci extension: click P1, P2 (the move) and P3 (end of the retracement); 1.0 = the P1-P2 move projected from P3" },
+  { id: "text", label: "Text", title: "Annotation: click where the note goes, then edit its text in Settings" },
 ];
 
 const SAVE_LABEL: Record<SaveState, string> = { loading: "Loading drawings...", saved: "All drawings saved", saving: "Saving...", unsaved: "Unsaved changes", error: "Save failed - retrying", offline: "Drawings offline" };
@@ -187,6 +189,9 @@ export function ChartTerminalBar(p: Props) {
         <button className={chip(prefs.showVcp)} onClick={() => set({ showVcp: !prefs.showVcp })} title={p.dailyOnlyNote ? "VCP is detected on daily candles: switch to 1D to see it" : "Volatility Contraction Pattern of the latest daily scan: base, T1/T2/... contractions, pivot, breakout"} data-testid="toggle-vcp">
           VCP (1D)
         </button>
+        <button className={chip(!!prefs.showIpo)} onClick={() => set({ showIpo: !prefs.showIpo })} title={p.dailyOnlyNote ? "The IPO base is detected on daily candles: switch to 1D to see it" : "IPO base of the latest daily scan: listing date, price discovery, base, pivot, breakout"} data-testid="toggle-ipo">
+          IPO base
+        </button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <div className="flex gap-1" role="group" aria-label="Drawing tools">
@@ -271,8 +276,24 @@ export function ChartTerminalBar(p: Props) {
         <button className="btn h-7" onClick={p.onFit} title="Zoom out to the whole history" data-testid="fit-content">
           Fit
         </button>
+        <span className="inline-flex overflow-hidden rounded border border-line" title="Chart type: candlesticks or a line of closing prices (same candles, indicators, overlays and drawings)">
+          <button className={`h-7 px-2 text-[11px] ${(prefs.chartType ?? "candle") === "candle" ? "bg-accent/20 text-accent" : "text-muted"}`} onClick={() => set({ chartType: "candle" })} data-testid="chart-type-candle">
+            Candles
+          </button>
+          <button className={`h-7 px-2 text-[11px] ${prefs.chartType === "line" ? "bg-accent/20 text-accent" : "text-muted"}`} onClick={() => set({ chartType: "line" })} data-testid="chart-type-line">
+            Line
+          </button>
+        </span>
         <button className={chip(prefs.logScale)} onClick={() => set({ logScale: !prefs.logScale })} title="Logarithmic price scale: equal % moves look equal across decades" data-testid="toggle-log">
           Log
+        </button>
+        <button
+          className={chip(!!prefs.indicatorsIncludePartial)}
+          onClick={() => set({ indicatorsIncludePartial: !prefs.indicatorsIncludePartial })}
+          title="1W / multi-month: also compute EMA / RSI / ATR on the running (incomplete) candle; its values are provisional. Detection never uses it."
+          data-testid="toggle-ind-partial"
+        >
+          Ind. incl. incomplete
         </button>
         <button className="btn h-7" onClick={p.onReset} data-testid="reset-zoom">
           Reset zoom
@@ -295,6 +316,20 @@ export function ChartTerminalBar(p: Props) {
         <button className="btn h-7" onClick={() => fileRef.current?.click()} data-testid="import-drawings">
           Import
         </button>
+        <label className="flex items-center gap-1 text-[11px] text-muted" title="Drawings are stored per user + symbol (+ the timeframe they were drawn on). 'local' is the single local user.">
+          User
+          <input
+            className="ctl h-7 w-20"
+            defaultValue={drawingUser()}
+            onBlur={(e) => {
+              if (e.target.value.trim() !== drawingUser()) {
+                setDrawingUser(e.target.value);
+                window.location.reload();
+              }
+            }}
+            data-testid="draw-user"
+          />
+        </label>
         <input
           ref={fileRef}
           type="file"

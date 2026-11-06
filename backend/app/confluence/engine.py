@@ -97,7 +97,7 @@ class SymbolEvidence:
         for e in primary:
             self.by[e["source"]].append(e)
         for e in context:
-            if e["source"] in ("stage", "rs_line", "rrg"):
+            if e["source"] in ("stage", "rs_line", "rrg", "sector"):
                 self.by[f"ctx_{e['source']}"].append(e)
         self.primary = primary
 
@@ -187,8 +187,20 @@ def _setup(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig) -> tuple[b
         elif st == "developing":
             listed.append(Item(v["evidence_id"], "vcp", "VCP developing (one contraction)", 0.0, "vcp", status="overlapping", note="not a setup yet"))
         else:
-            f = cfg.forming_factor if st == "forming" else 0.8 if st == "pivot_cross_low_volume" else 1.0
+            f = cfg.forming_factor if st == "forming" else 0.8 if _m(v).get("pivot_crossed_low_volume") else 1.0
             items.append(Item(v["evidence_id"], "vcp", f"VCP {m.get('status_label', st)} (quality {v.get('quality'):.0f})", q * f, "vcp", time=m.get("base_end")))
+    ip = ev.one("ipo_base")
+    if ip is not None:
+        st = ip["status"]
+        lab = f"IPO base {_m(ip).get('status_label', st)} (quality {ip.get('quality') or 0:.0f})"
+        if direction != "bullish":
+            listed.append(Item(ip["evidence_id"], "ipo_base", lab, 0.0, "ipo_base", status="overlapping", note="bullish structure: not counted for bearish"))
+        elif st in ("invalidated", "failed_breakout"):
+            listed.append(Item(ip["evidence_id"], "ipo_base", lab, 0.0, "ipo_base", status="invalidated"))
+        elif st in cfg.ipo_state_scores:
+            items.append(Item(ip["evidence_id"], "ipo_base", lab, (ip.get("quality") or 0.0) / 100.0 * cfg.ipo_state_scores[st], "ipo_base", time=(_m(ip).get("base") or {}).get("end")))
+        else:
+            listed.append(Item(ip["evidence_id"], "ipo_base", lab, 0.0, "ipo_base", status="overlapping", note="no post-listing base yet"))
     for p in ev.get("pattern"):
         m = _m(p)
         lab = f"{m.get('pattern_name')} ({p['status']}, quality {p.get('quality') or 0:.0f})"
@@ -233,8 +245,24 @@ def _trigger(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig, tf: str)
         else:
             it.status, it.strength = "expired", 0.0
             listed.append(it)
+    for e in ev.get("fresh_breakout"):
+        if e["kind"] != "state" or e["direction"] != direction or e["status"] not in cfg.setup_state_scores:
+            continue
+        m = _m(e)
+        items.append(Item(e["evidence_id"], "fresh_breakout", f"About to break out: {m.get('state_label', e['status'])} ({m.get('distance_pct')} % / {m.get('distance_atr')} ATR from the {m.get('level_kind', '10D level')})", cfg.setup_state_scores[e["status"]], "breakout_10d", time=e.get("signal_time")))
+    ip = ev.one("ipo_base")
+    if ip is not None and direction == "bullish" and ip["status"] == "breakout":
+        m = _m(ip)
+        age = ip.get("age_bars") or 0
+        bk = m.get("breakout") or {}
+        it = Item(ip["evidence_id"], "ipo_base", f"IPO base breakout ({age} sessions ago, volume {bk.get('volume_ratio')}x)", max(0.7, (ip.get("quality") or 0.0) / 100.0), "ipo_breakout", time=bk.get("time"))
+        if age <= cfg.freshness_sessions.get("ipo_breakout", 0):
+            items.append(it)
+        else:
+            it.status, it.strength = "expired", 0.0
+            listed.append(it)
     v = ev.one("vcp")
-    if v is not None and direction == "bullish" and v["status"] in ("breakout", "breakout_pending"):
+    if v is not None and direction == "bullish" and v["status"] == "breakout":
         m = _m(v)
         age = m.get("breakout_age") or 0
         it = Item(v["evidence_id"], "vcp", f"VCP pivot breakout ({age} sessions ago, volume {m.get('breakout_volume_ratio')}x)", max(0.7, (v.get("quality") or 0.0) / 100.0), "vcp_breakout", time=m.get("breakout_time"))
@@ -278,12 +306,18 @@ def _volume_candle(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig) ->
             m = _m(e)
             if m.get("volume_ratio") is not None:
                 vol_items.append(Item(e["evidence_id"], src, f"Breakout volume {m.get('volume_ratio')}x (20-day average)", _rvol_strength(m.get("volume_ratio"), cfg), "volume", time=e.get("signal_time")))
-    vol_items.sort(key=lambda x: -x.strength)
-    for i, it in enumerate(vol_items):
-        it.status = "used" if i == 0 else "overlapping"
-        if i:
-            it.note = "same volume measured again (breakout candle / shock): not added"
-    V = vol_items[0].strength if vol_items else 0.0
+    if direction == "bullish":
+        v = ev.one("vcp")
+        if v is not None and v["status"] not in ("invalidated", "failed_breakout", "developing"):
+            r = _m(v).get("final_volume_vs_avg50")
+            if r is not None:
+                vol_items.append(Item(v["evidence_id"], "vcp", f"VCP volume dry-up: final contraction {r}x the 50-day average", _clamp((cfg.dry_up_zero - r) / (cfg.dry_up_zero - cfg.dry_up_full)), "dry_up", time=_m(v).get("base_end")))
+        ip = ev.one("ipo_base")
+        if ip is not None and ip["status"] not in ("invalidated", "failed_breakout", "too_young", "discovery_phase"):
+            r = (_m(ip).get("base") or {}).get("volume_dry_up_ratio")
+            if r is not None:
+                vol_items.append(Item(ip["evidence_id"], "ipo_base", f"IPO base volume dry-up: right side {r}x the discovery-period volume", _clamp((cfg.dry_up_zero - r) / (cfg.dry_up_zero - cfg.dry_up_full)), "dry_up", time=(_m(ip).get("base") or {}).get("end")))
+    V = _best_plus_one(vol_items, cfg.second_evidence_bonus, "same volume behaviour measured again (breakout candle / shock / dry-up of one base): not added")
     candles: list[Item] = []
     want = "bullish_marubozu" if direction == "bullish" else "bearish_marubozu"
     for e in ev.get("marubozu"):
@@ -325,7 +359,16 @@ def _rs(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig) -> tuple[bool
         key = q if direction == "bullish" else MIRROR_RRG.get(q, q)
         rr_c = cfg.rrg_scores.get(key, 0.0)
         items.append(Item(rr["evidence_id"], "rrg", f"RRG {q} vs {_m(rr).get('benchmark')}", rr_c, "rrg", time=rr.get("signal_time")))
+    sec = ev.one("ctx_sector")
+    sec_item = None
+    if sec is not None:
+        q = _m(sec).get("quadrant")
+        key = q if direction == "bullish" else MIRROR_RRG.get(q, q)
+        sec_item = Item(sec["evidence_id"], "sector", f"Sector {_m(sec).get('sector_index')} {q} vs {_m(sec).get('benchmark')}", cfg.rrg_scores.get(key, 0.0), "sector", time=sec.get("signal_time"))
     if rs_c is None and rr_c is None:
+        if sec_item is not None:
+            sec_item.status, sec_item.note = "overlapping", "sector strength alone does not measure the stock: not scored"
+            items.append(sec_item)
         return False, 0.0, items
     score = max(x for x in (rs_c, rr_c) if x is not None)
     agree = rs_c is not None and rr_c is not None and min(rs_c, rr_c) >= 0.6
@@ -336,6 +379,13 @@ def _rs(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig) -> tuple[bool
         it.status = "used" if i == 0 else ("bonus" if agree else "overlapping")
         if i:
             it.note = f"correlated relative-strength measure: agreement bonus {cfg.agreement_bonus} only" if agree else "correlated relative-strength measure: not added"
+    if sec_item is not None:
+        if sec_item.strength > 0:
+            sec_item.status, sec_item.note = "bonus", f"independent sector / index strength: + {cfg.second_evidence_bonus} x strength"
+            score += cfg.second_evidence_bonus * sec_item.strength
+        else:
+            sec_item.status, sec_item.note = "overlapping", "weak sector: nothing added"
+        items.append(sec_item)
     return True, _clamp(score), items
 
 
@@ -353,6 +403,11 @@ def _combo(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig) -> dict[st
     for e in ev.get("volume_shock"):
         if e["kind"] == "event" and e["status"] == "shock" and e["direction"] in (direction, "neutral") and e["signal_time"] in sessions:
             sessions[e["signal_time"]].add("volume")
+    # Marubozu + strong volume on the same recent session (no breakout needed)
+    for e in ev.get("marubozu"):
+        if e["signal_type"] == want and (e.get("age_bars") or 0) <= cfg.combo_max_age_sessions and e["signal_time"] not in sessions:
+            if any(s["kind"] == "event" and s["status"] == "shock" and s["direction"] in (direction, "neutral") and s["signal_time"] == e["signal_time"] for s in ev.get("volume_shock")):
+                sessions[e["signal_time"]] |= {"marubozu", "volume"}
     best: dict[str, Any] = {"type": None, "points": 0.0, "session": None}
     for t, parts in sessions.items():
         if {"breakout", "marubozu", "volume"} <= parts:
@@ -361,6 +416,8 @@ def _combo(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig) -> dict[st
             key = "breakout_volume"
         elif {"breakout", "marubozu"} <= parts:
             key = "breakout_marubozu"
+        elif {"marubozu", "volume"} <= parts:
+            key = "marubozu_volume"
         else:
             continue
         pts = cfg.combo_points.get(key, 0.0)
@@ -460,6 +517,16 @@ def summarize(primary: list[dict[str, Any]], context: list[dict[str, Any]], dire
     out["rs_trend"] = _m(rs).get("rs_trend") if rs else None
     rr = ev.one("ctx_rrg")
     out["rrg_quadrant"] = _m(rr).get("quadrant") if rr else None
+    sec = ev.one("ctx_sector")
+    out["sector_index"] = _m(sec).get("sector_index") if sec else None
+    out["sector_quadrant"] = _m(sec).get("quadrant") if sec else None
+    ip = ev.one("ipo_base")
+    out["ipo_status"] = ip["status"] if ip else None
+    out["ipo_label"] = _m(ip).get("status_label") if ip else None
+    setup = next((e for e in ev.get("fresh_breakout") if e["kind"] == "state" and e["direction"] == direction), None)
+    out["setup_state"] = setup["status"] if setup else None
+    out["setup_label"] = _m(setup).get("state_label") if setup else None
+    out["setup_distance_pct"] = _m(setup).get("distance_pct") if setup else None
     times = [e.get("signal_time") for e in primary if e["kind"] == "event" and e.get("signal_time") and e.get("lifecycle") == "active"]
     out["latest_signal_time"] = max(times) if times else None
     ema_m = _m(ema) if ema else {}

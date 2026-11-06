@@ -29,7 +29,10 @@ export interface ChartPrefs {
   showRsLine: boolean;
   showStage: boolean;
   showVcp: boolean; // VCP geometry from the latest daily scan (daily charts)
+  showIpo?: boolean; // IPO base geometry from the latest daily scan (daily charts)
   logScale: boolean; // logarithmic price axis (long histories)
+  chartType?: "candle" | "line"; // candlesticks or a line of closes (same data, same drawings)
+  indicatorsIncludePartial?: boolean; // 1W / multi-month: EMA/RSI/ATR also on the running (incomplete) period
 }
 
 export const DEFAULT_EMAS: EmaPref[] = [
@@ -61,7 +64,10 @@ export const DEFAULT_PREFS: ChartPrefs = {
   showRsLine: false,
   showStage: false,
   showVcp: false,
+  showIpo: false,
   logScale: false,
+  chartType: "candle",
+  indicatorsIncludePartial: false,
 };
 
 const PREFS_KEY = "pas.chartPrefs.v1";

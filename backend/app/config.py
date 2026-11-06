@@ -62,6 +62,7 @@ class Settings:
 
     nifty500_url: str = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
     fno_url: str = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+    equity_list_url: str = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"  # official listing dates (IPO base)
     holidays_url: str = "https://www.nseindia.com/api/holiday-master?type=trading"
     # E2: official NSE index catalogue and index history (NSE Indices data on nseindia.com).
     index_catalogue_url: str = "https://www.nseindia.com/api/allIndices"
@@ -794,7 +795,7 @@ def _vs_liquidity() -> dict[str, float]:
 
 @dataclass(frozen=True)
 class SignalConfig:
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     atr_period: int = 14  # must equal DetectionConfig.atr_period (enforced by tests)
 
     # ---- Fresh N-day breakout (spec 3): previous N completed daily candles, current excluded
@@ -833,6 +834,15 @@ class SignalConfig:
     vs_min_avg_traded_value: dict[str, float] = field(default_factory=_vs_liquidity)
     vs_store_bars: int = 5
 
+    # ---- About to break out (10-day high / low setups of the latest completed daily candle)
+    about_to_breakout_pct: float = 2.0
+    about_to_breakout_atr: float = 0.5
+    about_to_breakout_rule: str = "both"
+    very_near_pct: float = 1.0
+    very_near_atr: float = 0.25
+    setup_expiry_sessions: int = 5
+    setup_rejection_sessions: int = 3
+
 
 SIGNAL_PARAM_META: dict[str, ParamMeta] = {
     "atr_period": ParamMeta("ATR period, Wilder smoothing (TradingView ta.atr). Shared with pattern detection.", "bars", ("ATR",)),
@@ -866,40 +876,50 @@ SIGNAL_PARAM_META: dict[str, ParamMeta] = {
     "vs_recent_range_bars": ParamMeta("Context: distance from the high / low of the previous N completed candles.", "bars", ("Volume Shocker",)),
     "vs_min_avg_traded_value": ParamMeta("ASSUMPTION: optional liquidity filter - minimum average traded value (close x volume, rupees) per candle over the reference window, by timeframe.", "INR per bar", ("Volume Shocker",), TIMEFRAMES),
     "vs_store_bars": ParamMeta("Volume shocks of the last N completed candles are stored by each scan.", "bars", ("Volume Shocker",)),
+    "about_to_breakout_pct": ParamMeta("About to break out: close within this % below the 10-day high, distance % = (10D high - close) / 10D high x 100 (spec initial 2.0).", "%", ("Fresh breakout",), ("1d",)),
+    "about_to_breakout_atr": ParamMeta("About to break out: close within this x ATR(14) below the 10-day high, distance ATR = (10D high - close) / ATR (spec initial 0.5).", "x ATR", ("Fresh breakout",), ("1d",)),
+    "about_to_breakout_rule": ParamMeta("ASSUMPTION: 'both' = within the % AND the ATR distance (fewer, closer setups); 'either' = within one of them.", "rule", ("Fresh breakout",), ("1d",)),
+    "very_near_pct": ParamMeta("ASSUMPTION: Very Near = within this % (and very_near_atr under the same rule) below the level.", "%", ("Fresh breakout",), ("1d",)),
+    "very_near_atr": ParamMeta("ASSUMPTION: Very Near ATR distance.", "x ATR", ("Fresh breakout",), ("1d",)),
+    "setup_expiry_sessions": ParamMeta("ASSUMPTION: a setup that stopped approaching (or a breakout older than this) is Expired for this many sessions, then dropped.", "sessions", ("Fresh breakout",), ("1d",)),
+    "setup_rejection_sessions": ParamMeta("ASSUMPTION: a breakout that closes back below its level within this many sessions is Rejected; so is an intraday push through the level that closes outside the Very Near distance.", "sessions", ("Fresh breakout",), ("1d",)),
 }
 
 
 def _vcp_weights() -> dict[str, float]:
-    return {"contraction_progression": 30, "volume_contraction": 25, "final_tightness": 20, "base_trend": 15, "pivot_quality": 10}
+    # spec (improvement task): progression 30 %, final contraction 20 %, volume 20 %, base 10 %, trend 10 %, pivot 10 %
+    return {"contraction_progression": 30, "final_contraction": 20, "volume_behaviour": 20, "base_structure": 10, "trend_context": 10, "pivot_quality": 10}
 
 
 @dataclass(frozen=True)
 class VCPConfig:
-    version: str = "1.0.0"
+    version: str = "2.0.0"
     atr_period: int = 14
-    # ---- structure (Minervini: 2-4 contractions typical, 2-6 broadest; T1 > T2 > ...)
+    # ---- structure (Minervini: successive contractions T1 > T2 > ..., 2-4 typical, up to 6)
     swing_k: int = 3
-    min_base_sessions: int = 15
-    max_base_sessions: int = 65
     min_contractions: int = 2
     max_contractions: int = 6
-    contraction_ratio_max: float = 0.75
-    min_contraction_depth_pct: float = 2.0
+    min_base_bars: int = 15
+    max_base_bars: int = 120
+    max_next_contraction_ratio: float = 0.75
+    min_contraction_pct: float = 3.0
+    max_final_contraction_pct: float = 10.0
+    final_volume_ratio: float = 0.70
+    near_pivot_pct: float = 3.0
+    breakout_volume_ratio: float = 1.5
     min_recovery_frac: float = 0.50
     base_high_tolerance_pct: float = 3.0
     base_start_high_lookback: int = 50
     # ---- preceding uptrend
     prior_trend_lookback: int = 126
     prior_advance_min_pct: float = 25.0
-    # ---- final contraction and volume dry-up
-    final_max_depth_pct: float = 10.0
+    min_prior_bars: int = 50
+    # ---- volume
     volume_avg_lookback: int = 50
     volume_final_vs_first_max: float = 0.85
     volume_dry_up_ratio: float = 0.60
     # ---- pivot, breakout, lifecycle
-    near_pivot_pct: float = 3.0
     breakout_buffer_atr: float = 0.0
-    breakout_volume_ratio: float = 1.5
     breakout_confirm_closes: int = 1
     failed_breakout_closes: int = 2
     post_breakout_track_sessions: int = 15
@@ -908,9 +928,12 @@ class VCPConfig:
     weights: dict[str, float] = field(default_factory=_vcp_weights)
     score_ratio_ideal: float = 0.50
     score_tight_full_pct: float = 3.0
-    score_volume_trend_full: float = 0.50
-    score_final_vs_avg_full: float = 0.60
-    score_final_vs_avg_zero: float = 1.00
+    score_final_atr_full: float = 1.5
+    score_final_atr_zero: float = 4.0
+    score_volume_full: float = 0.50
+    score_volume_zero: float = 1.00
+    score_t1_depth_ideal: tuple[float, float] = (10.0, 35.0)
+    score_base_bars_ideal: tuple[int, int] = (20, 80)
     score_advance_full_pct: float = 60.0
     score_pivot_gap_full_pct: float = 3.0
     score_pivot_gap_zero_pct: float = 15.0
@@ -920,37 +943,97 @@ VCP_SOURCE_PARAMS = ("min_contractions", "max_contractions")
 VCP_PARAM_META: dict[str, ParamMeta] = {
     "atr_period": ParamMeta("ATR period, Wilder smoothing. Shared with pattern detection.", "bars", ("VCP",), ("1d",)),
     "swing_k": ParamMeta("Contraction highs are confirmed swing highs (k completed bars each side); lows are confirmed swing lows except the developing final low.", "bars", ("VCP",), ("1d",)),
-    "min_base_sessions": ParamMeta("ENGINEERING: shortest base (first contraction high to the latest / breakout candle). Initial search range, not a Minervini rule.", "sessions", ("VCP",), ("1d",)),
-    "max_base_sessions": ParamMeta("ENGINEERING: longest base searched on daily candles.", "sessions", ("VCP",), ("1d",)),
     "min_contractions": ParamMeta("SOURCE (Minervini): at least two contractions; two to four is typical.", "contractions", ("VCP",), ("1d",)),
-    "max_contractions": ParamMeta("SOURCE (Minervini): up to six contractions in broad examples.", "contractions", ("VCP",), ("1d",)),
-    "contraction_ratio_max": ParamMeta("ENGINEERING: every contraction depth <= this x the previous depth (T1 > T2 > T3 ...). Initial tolerance, not a universal Minervini rule.", "ratio", ("VCP",), ("1d",)),
-    "min_contraction_depth_pct": ParamMeta("ENGINEERING: a pullback smaller than this % of its high is noise and does not count as a contraction.", "%", ("VCP",), ("1d",)),
+    "max_contractions": ParamMeta("SOURCE (Minervini): occasionally five or six contractions.", "contractions", ("VCP",), ("1d",)),
+    "min_base_bars": ParamMeta("ENGINEERING default (spec vcp.min_base_bars): shortest base, first contraction high to the latest / breakout candle.", "sessions", ("VCP",), ("1d",)),
+    "max_base_bars": ParamMeta("ENGINEERING default (spec vcp.max_base_bars): longest base searched on daily candles.", "sessions", ("VCP",), ("1d",)),
+    "max_next_contraction_ratio": ParamMeta("ENGINEERING default (spec vcp.max_next_contraction_ratio): every contraction depth <= this x the previous depth (T1 > T2 > T3 ...). Minervini describes each pullback as roughly half the previous; the tolerance is not his rule.", "ratio", ("VCP",), ("1d",)),
+    "min_contraction_pct": ParamMeta("ENGINEERING default (spec vcp.min_contraction_pct): a pullback smaller than this % of its high is noise, not a contraction.", "%", ("VCP",), ("1d",)),
+    "max_final_contraction_pct": ParamMeta("ENGINEERING default (spec vcp.max_final_contraction_pct): the final contraction is tight when its depth <= this %; a wider final contraction stays Forming.", "%", ("VCP",), ("1d",)),
+    "final_volume_ratio": ParamMeta("ENGINEERING default (spec vcp.final_volume_ratio): mean volume of the final contraction <= this x the average volume of the 50 sessions before it (volume dry-up).", "ratio", ("VCP",), ("1d",)),
+    "near_pivot_pct": ParamMeta("Near Pivot when the close is within this % below the pivot (spec vcp.near_pivot_pct).", "%", ("VCP",), ("1d",)),
+    "breakout_volume_ratio": ParamMeta("Breakout volume must be >= this x the previous 50-day average volume (spec vcp.breakout_volume_ratio).", "ratio", ("VCP",), ("1d",)),
     "min_recovery_frac": ParamMeta("ENGINEERING: a new contraction starts only at a swing high that recovered at least this share of the previous contraction's decline (a bounce inside a decline is not a new contraction).", "fraction", ("VCP",), ("1d",)),
     "base_high_tolerance_pct": ParamMeta("ENGINEERING: before a breakout no later high may exceed the base's first high by more than this % (otherwise the base start is not the base high).", "%", ("VCP",), ("1d",)),
     "base_start_high_lookback": ParamMeta("ENGINEERING: the first contraction high must be the highest high of the previous N sessions (the base starts at a high).", "sessions", ("VCP",), ("1d",)),
     "prior_trend_lookback": ParamMeta("ENGINEERING: sessions before the base searched for the low the preceding advance started from.", "sessions", ("VCP",), ("1d",)),
     "prior_advance_min_pct": ParamMeta("ASSUMPTION: preceding uptrend = base high / lowest low of the prior window - 1 >= this % (Minervini requires a prior uptrend; the number is an engineering default).", "%", ("VCP",), ("1d",)),
-    "final_max_depth_pct": ParamMeta("ENGINEERING: the final contraction is 'tight' when its depth <= this %. A wide final contraction stays Forming.", "%", ("VCP",), ("1d",)),
-    "volume_avg_lookback": ParamMeta("Reference volume: mean of the N completed sessions before each contraction starts (prior 50-day average).", "sessions", ("VCP",), ("1d",)),
-    "volume_final_vs_first_max": ParamMeta("ENGINEERING gate: mean volume of the final contraction <= this x the mean volume of T1 (supply drying up).", "ratio", ("VCP",), ("1d",)),
-    "volume_dry_up_ratio": ParamMeta("ENGINEERING: a session with volume <= this x the prior 50-day average counts as a dry-up day (recorded; never sufficient on its own).", "ratio", ("VCP",), ("1d",)),
-    "near_pivot_pct": ParamMeta("Near Pivot when the close is within this % below the pivot.", "%", ("VCP",), ("1d",)),
-    "breakout_buffer_atr": ParamMeta("Breakout: completed close > pivot + this x ATR (0 = close above the pivot, spec 6.7).", "x ATR", ("VCP",), ("1d",)),
-    "breakout_volume_ratio": ParamMeta("Breakout volume must be >= this x the previous 50-day average volume (spec 6.7 initial 1.5x).", "ratio", ("VCP",), ("1d",)),
+    "min_prior_bars": ParamMeta("ENGINEERING: at least this many completed sessions before the base start, so a preceding uptrend can be measured at all (a fresh listing's first base is the IPO base scanner's job).", "sessions", ("VCP",), ("1d",)),
+    "volume_avg_lookback": ParamMeta("Reference volume: mean of the N completed sessions before a contraction / breakout (prior 50-day average).", "sessions", ("VCP",), ("1d",)),
+    "volume_final_vs_first_max": ParamMeta("ENGINEERING gate (volume generally contracting): mean volume of the final contraction <= this x that of T1.", "ratio", ("VCP",), ("1d",)),
+    "volume_dry_up_ratio": ParamMeta("ENGINEERING: a session with volume <= this x the prior 50-day average counts as a dry-up day (reported; never sufficient on its own).", "ratio", ("VCP",), ("1d",)),
+    "breakout_buffer_atr": ParamMeta("Breakout: completed close > pivot + this x ATR (0 = close above the pivot).", "x ATR", ("VCP",), ("1d",)),
     "breakout_confirm_closes": ParamMeta("1 = one completed close above the pivot; 2 = two consecutive closes (pending until the second).", "closes", ("VCP",), ("1d",)),
     "failed_breakout_closes": ParamMeta("ENGINEERING: consecutive closes back below the pivot after a breakout -> Failed Breakout.", "closes", ("VCP",), ("1d",)),
     "post_breakout_track_sessions": ParamMeta("A breakout (or failure) is reported for this many sessions after the breakout candle.", "sessions", ("VCP",), ("1d",)),
     "invalidation_buffer_atr": ParamMeta("Invalidated when a close falls below the final contraction low (or the base low) by more than this x ATR.", "x ATR", ("VCP",), ("1d",)),
-    "weights": ParamMeta("Quality weights (spec 6.9 initial weights; placeholders, not validated). Score = 100 x weighted mean of 0-1 components.", "weight", ("VCP",), ("1d",)),
-    "score_ratio_ideal": ParamMeta("Progression component = 1 when the mean depth ratio T(i+1)/T(i) <= this; 0 at contraction_ratio_max.", "ratio", ("VCP",), ("1d",)),
-    "score_tight_full_pct": ParamMeta("Tightness component = 1 when the final depth <= this %; 0 at final_max_depth_pct.", "%", ("VCP",), ("1d",)),
-    "score_volume_trend_full": ParamMeta("Volume-trend sub-score = 1 when final / T1 mean volume <= this; 0 at volume_final_vs_first_max.", "ratio", ("VCP",), ("1d",)),
-    "score_final_vs_avg_full": ParamMeta("Dry-up sub-score = 1 when the final contraction's volume / prior 50-day average <= this.", "ratio", ("VCP",), ("1d",)),
-    "score_final_vs_avg_zero": ParamMeta("Dry-up sub-score = 0 when that ratio >= this.", "ratio", ("VCP",), ("1d",)),
-    "score_advance_full_pct": ParamMeta("Trend sub-score = 1 when the preceding advance >= this %.", "%", ("VCP",), ("1d",)),
-    "score_pivot_gap_full_pct": ParamMeta("Pivot component = 1 when the pivot is within this % of the base's first high.", "%", ("VCP",), ("1d",)),
-    "score_pivot_gap_zero_pct": ParamMeta("Pivot component = 0 when the pivot is this % or more below the base's first high.", "%", ("VCP",), ("1d",)),
+    "weights": ParamMeta("Score weights (spec: progression 30, final contraction 20, volume 20, base structure 10, trend context 10, pivot quality 10). Placeholders, not validated; the score is not a probability.", "weight", ("VCP",), ("1d",)),
+    "score_ratio_ideal": ParamMeta("Progression: 1 when the mean depth ratio T(i+1)/T(i) <= this; 0 at max_next_contraction_ratio.", "ratio", ("VCP",), ("1d",)),
+    "score_tight_full_pct": ParamMeta("Final contraction: depth part = 1 at <= this %, 0 at max_final_contraction_pct.", "%", ("VCP",), ("1d",)),
+    "score_final_atr_full": ParamMeta("Final contraction: ATR-normalised range part = 1 at <= this x ATR.", "x ATR", ("VCP",), ("1d",)),
+    "score_final_atr_zero": ParamMeta("Final contraction: ATR-normalised range part = 0 at >= this x ATR.", "x ATR", ("VCP",), ("1d",)),
+    "score_volume_full": ParamMeta("Volume: a ratio (final vs 50-day average, final vs T1) scores 1 at <= this.", "ratio", ("VCP",), ("1d",)),
+    "score_volume_zero": ParamMeta("Volume: a ratio scores 0 at >= this.", "ratio", ("VCP",), ("1d",)),
+    "score_t1_depth_ideal": ParamMeta("ASSUMPTION base structure: T1 depth inside this % range scores 1 (Minervini examples mostly 10-35 %).", "%", ("VCP",), ("1d",)),
+    "score_base_bars_ideal": ParamMeta("ASSUMPTION base structure: base length inside this range scores 1.", "sessions", ("VCP",), ("1d",)),
+    "score_advance_full_pct": ParamMeta("Trend context: preceding advance part = 1 at >= this %.", "%", ("VCP",), ("1d",)),
+    "score_pivot_gap_full_pct": ParamMeta("Pivot quality: 1 when the pivot is within this % of the base's first high.", "%", ("VCP",), ("1d",)),
+    "score_pivot_gap_zero_pct": ParamMeta("Pivot quality: 0 when the pivot is this % or more below the base's first high.", "%", ("VCP",), ("1d",)),
+}
+
+
+@dataclass(frozen=True)
+class IPOConfig:
+    version: str = "1.0.0"
+    # ---- spec initial defaults (engineering, configurable)
+    min_age_bars: int = 25
+    max_age_bars: int = 365
+    discovery_bars: int = 20
+    min_base_bars: int = 20
+    max_base_bars: int = 120
+    min_base_depth_pct: float = 8.0
+    max_base_depth_pct: float = 35.0
+    min_resistance_touches: int = 2
+    near_pivot_pct: float = 3.0
+    breakout_volume_ratio: float = 1.5
+    failed_breakout_bars: int = 5
+    # ---- ASSUMPTION / engineering additions
+    resistance_zone_pct: float = 3.0
+    touch_separation_bars: int = 5
+    discovery_new_high_bars: int = 5
+    settle_window_bars: int = 10
+    settle_range_ratio: float = 0.80
+    breakout_buffer_pct: float = 0.0
+    volume_avg_bars: int = 50
+    breakout_track_bars: int = 10
+    listing_gap_tolerance_sessions: int = 5
+    first_candle_fallback: bool = False
+    weights: dict[str, float] = field(default_factory=lambda: {"depth": 20, "length": 15, "resistance": 20, "volume_dry_up": 20, "tightness": 15, "proximity": 10})
+
+
+IPO_PARAM_META: dict[str, ParamMeta] = {
+    "min_age_bars": ParamMeta("Spec ipo.min_age_bars: fewer completed sessions since listing -> Too Young.", "sessions", ("IPO base",), ("1d",)),
+    "max_age_bars": ParamMeta("Spec ipo.max_age_bars: older listings are not IPO-base candidates.", "sessions", ("IPO base",), ("1d",)),
+    "discovery_bars": ParamMeta("Spec ipo.discovery_bars: first sessions after listing = initial price discovery (no base is validated inside it).", "sessions", ("IPO base",), ("1d",)),
+    "min_base_bars": ParamMeta("Spec ipo.min_base_bars: shortest base from its high (resistance) to the latest / breakout candle.", "sessions", ("IPO base",), ("1d",)),
+    "max_base_bars": ParamMeta("Spec ipo.max_base_bars: a base longer than this without a breakout is Invalidated (no longer an IPO base).", "sessions", ("IPO base",), ("1d",)),
+    "min_base_depth_pct": ParamMeta("Spec ipo.min_base_depth_pct: base depth = (base high - base low) / base high x 100 must be at least this (shallower = still forming).", "%", ("IPO base",), ("1d",)),
+    "max_base_depth_pct": ParamMeta("Spec ipo.max_base_depth_pct: a deeper decline Invalidates the base.", "%", ("IPO base",), ("1d",)),
+    "min_resistance_touches": ParamMeta("Spec ipo.min_resistance_touches: separate highs within resistance_zone_pct of the base high (the first high counts).", "touches", ("IPO base",), ("1d",)),
+    "near_pivot_pct": ParamMeta("Spec ipo.near_pivot_pct: Near Pivot when the close is within this % below the pivot.", "%", ("IPO base",), ("1d",)),
+    "breakout_volume_ratio": ParamMeta("Spec ipo.breakout_volume_ratio: breakout volume >= this x the average of the previous sessions (up to volume_avg_bars since listing).", "ratio", ("IPO base",), ("1d",)),
+    "failed_breakout_bars": ParamMeta("Spec ipo.failed_breakout_bars: a close back below the pivot within this many sessions after the breakout -> Failed Breakout.", "sessions", ("IPO base",), ("1d",)),
+    "resistance_zone_pct": ParamMeta("ASSUMPTION: a swing high within this % below the base high is a resistance touch.", "%", ("IPO base",), ("1d",)),
+    "touch_separation_bars": ParamMeta("ASSUMPTION: resistance touches must be at least this many sessions apart.", "sessions", ("IPO base",), ("1d",)),
+    "discovery_new_high_bars": ParamMeta("ASSUMPTION: a new post-listing high within the last N sessions means price discovery is still going on (Discovery Phase).", "sessions", ("IPO base",), ("1d",)),
+    "settle_window_bars": ParamMeta("ASSUMPTION: volatility settled = mean daily range % of the last N base sessions ...", "sessions", ("IPO base",), ("1d",)),
+    "settle_range_ratio": ParamMeta("ASSUMPTION: ... <= this x the mean daily range % of the discovery period.", "ratio", ("IPO base",), ("1d",)),
+    "breakout_buffer_pct": ParamMeta("Breakout: completed close > pivot x (1 + this %).", "%", ("IPO base",), ("1d",)),
+    "volume_avg_bars": ParamMeta("Reference volume for the breakout: mean of up to N previous sessions since listing.", "sessions", ("IPO base",), ("1d",)),
+    "breakout_track_bars": ParamMeta("ASSUMPTION: a breakout / failed breakout is reported for this many sessions.", "sessions", ("IPO base",), ("1d",)),
+    "listing_gap_tolerance_sessions": ParamMeta("Data check: the provider history may start at most this many sessions after the official listing date; otherwise the discovery period is incomplete and the stock is not evaluated.", "sessions", ("IPO base",), ("1d",)),
+    "first_candle_fallback": ParamMeta("ASSUMPTION switch: without an official listing date, treat the first candle of a short provider history as the listing (off by default: a renamed ticker can restart its provider history).", "flag", ("IPO base",), ("1d",)),
+    "weights": ParamMeta("ASSUMPTION quality weights (placeholders, not validated): depth, length, resistance touches, volume dry-up, right-side tightness, proximity to the pivot. Not a probability.", "weight", ("IPO base",), ("1d",)),
 }
 
 
@@ -964,11 +1047,45 @@ def _cf_bands() -> dict[str, float]:
 
 def _cf_freshness() -> dict[str, int]:
     # completed sessions (bars of the evidence timeframe) an event stays fresh
-    return {"fresh_breakout": 5, "week52": 5, "volume_shock": 3, "marubozu": 1, "pattern_breakout": 5, "vcp_breakout": 5}
+    return {"fresh_breakout": 5, "week52": 5, "volume_shock": 3, "marubozu": 1, "pattern_breakout": 5, "vcp_breakout": 5, "ipo_breakout": 5}
 
 
 def _cf_combo() -> dict[str, float]:
-    return {"breakout_marubozu_volume": 10.0, "breakout_volume": 5.0, "breakout_marubozu": 4.0}
+    return {"breakout_marubozu_volume": 10.0, "breakout_volume": 5.0, "breakout_marubozu": 4.0, "marubozu_volume": 3.0}
+
+
+def _cf_setup_states() -> dict[str, float]:
+    # about-to-break-out states of the 10-day level (trigger category, same family as the breakout itself)
+    return {"approaching": 0.35, "very_near": 0.5, "touched": 0.55}
+
+
+def _cf_ipo_states() -> dict[str, float]:
+    # IPO base status factor x the base's quality (setup category)
+    return {"base_validated": 0.8, "near_pivot": 1.0, "breakout": 1.0, "base_forming": 0.5}
+
+
+def _cf_sector_map() -> dict[str, str]:
+    # ASSUMPTION: NIFTY 500 'Industry' -> NSE sectoral / thematic index used as the sector benchmark
+    return {
+        "Financial Services": "NIFTY FINANCIAL SERVICES",
+        "Information Technology": "NIFTY IT",
+        "Healthcare": "NIFTY HEALTHCARE INDEX",
+        "Automobile and Auto Components": "NIFTY AUTO",
+        "Fast Moving Consumer Goods": "NIFTY FMCG",
+        "Metals & Mining": "NIFTY METAL",
+        "Oil Gas & Consumable Fuels": "NIFTY OIL & GAS",
+        "Consumer Durables": "NIFTY CONSUMER DURABLES",
+        "Realty": "NIFTY REALTY",
+        "Chemicals": "NIFTY CHEMICALS",
+        "Power": "NIFTY ENERGY",
+        "Media Entertainment & Publication": "NIFTY MEDIA",
+        "Capital Goods": "NIFTY INDIA MANUFACTURING",
+        "Construction": "NIFTY INFRASTRUCTURE",
+        "Construction Materials": "NIFTY COMMODITIES",
+        "Consumer Services": "NIFTY INDIA CONSUMPTION",
+        "Services": "NIFTY SERVICES SECTOR",
+        "Telecommunication": "NIFTY SERVICES SECTOR",
+    }
 
 
 def _cf_stage() -> dict[str, float]:
@@ -985,7 +1102,7 @@ def _cf_rrg() -> dict[str, float]:
 
 @dataclass(frozen=True)
 class ConfluenceConfig:
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     weights: dict[str, float] = field(default_factory=_cf_weights)
     bands: dict[str, float] = field(default_factory=_cf_bands)
     freshness_sessions: dict[str, int] = field(default_factory=_cf_freshness)
@@ -997,6 +1114,11 @@ class ConfluenceConfig:
     stage_scores: dict[str, float] = field(default_factory=_cf_stage)
     alignment_scores: dict[str, float] = field(default_factory=_cf_alignment)
     rrg_scores: dict[str, float] = field(default_factory=_cf_rrg)
+    setup_state_scores: dict[str, float] = field(default_factory=_cf_setup_states)
+    ipo_state_scores: dict[str, float] = field(default_factory=_cf_ipo_states)
+    sector_index_map: dict[str, str] = field(default_factory=_cf_sector_map)
+    dry_up_full: float = 0.50
+    dry_up_zero: float = 1.00
     rvol_zero: float = 1.5
     rvol_full: float = 4.0
     breakout_atr_full: float = 1.5
@@ -1013,10 +1135,15 @@ CONFLUENCE_PARAM_META: dict[str, ParamMeta] = {
     "min_coverage": ParamMeta("A stock is ranked only when the categories with available data carry at least this share of the total weight.", "fraction", ("Confluence",)),
     "second_evidence_bonus": ParamMeta("Inside a category the strongest evidence counts fully; one more independent piece (different family) adds at most this x its strength; the category is capped at 1.", "fraction", ("Confluence",)),
     "agreement_bonus": ParamMeta("Correlated pairs (Stage vs EMA alignment, RS Line vs RRG): best of the two plus this when both agree (>= 0.6), capped at 1.", "fraction", ("Confluence",)),
-    "combo_points": ParamMeta("Same-session combination bonus in score points (best one applies; total capped at 100): fresh breakout + Marubozu + volume shock, breakout + volume shock, breakout + Marubozu.", "points", ("Confluence",)),
+    "combo_points": ParamMeta("Same-session combination bonus in score points (best one applies; total capped at 100): fresh breakout + Marubozu + volume shock, breakout + volume shock, breakout + Marubozu, Marubozu + volume shock.", "points", ("Confluence",)),
     "combo_max_age_sessions": ParamMeta("The combination session must be at most this many completed sessions old; all parts on the same session.", "sessions", ("Confluence",)),
     "stage_scores": ParamMeta("ASSUMPTION: bullish trend sub-score per Stage Analysis class (the user's stage rules are unchanged; this only maps them to 0-1).", "score", ("Confluence",)),
     "alignment_scores": ParamMeta("ASSUMPTION: bullish trend sub-score per EMA alignment state (mirrored for bearish).", "score", ("Confluence",)),
+    "setup_state_scores": ParamMeta("ASSUMPTION: trigger strength of an about-to-break-out 10-day setup (deliberately below a real breakout; same family as the 10-day breakout, so never added to it).", "score", ("Confluence",)),
+    "ipo_state_scores": ParamMeta("ASSUMPTION: setup factor per IPO base status (x the base quality / 100).", "score", ("Confluence",)),
+    "sector_index_map": ParamMeta("ASSUMPTION: NIFTY 500 industry -> NSE sectoral / thematic index whose RRG quadrant vs NIFTY 500 is the stock's sector-strength evidence (relative-strength category, capped bonus).", "index", ("Confluence",)),
+    "dry_up_full": ParamMeta("Volume dry-up strength (VCP final contraction / IPO base right side) = 1 when volume / 50-day average <= this ...", "ratio", ("Confluence",)),
+    "dry_up_zero": ParamMeta("... and 0 when it is >= this (linear in between).", "ratio", ("Confluence",)),
     "rrg_scores": ParamMeta("ASSUMPTION: bullish RS sub-score per RRG quadrant of the stock vs NIFTY 500 (mirrored for bearish).", "score", ("Confluence",)),
     "rvol_zero": ParamMeta("Volume strength = 0 at this RVOL.", "x average", ("Confluence",)),
     "rvol_full": ParamMeta("Volume strength = 1 at this RVOL (linear in between).", "x average", ("Confluence",)),
@@ -1029,14 +1156,21 @@ CONFLUENCE_PARAM_META: dict[str, ParamMeta] = {
 
 KNOWN_SIGNAL_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "803155cbb7249f12",  # fresh 10-day breakouts, 52-week, Volume Shocker (initial engineering defaults)
+    "1.1.0": "bb601be383bb6721",  # + about-to-break-out states of the 10-day level
 }
 KNOWN_VCP_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "819cd0e5d2a261bc",  # VCP detector (Minervini principles + engineering thresholds)
+    "2.0.0": "2159765b755d4287",  # rebuilt: spec defaults (base 15-120, min 3 %, final volume 0.70), Final Contraction state, 6-part score
 }
 KNOWN_CONFLUENCE_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "b1b29d836e9d6c12",  # five-category confluence score, placeholder weights
+    "1.1.0": "5a8786a62bf4fbfc",  # + about-to-breakout, IPO base, VCP dry-up, Marubozu + volume, sector strength
+}
+KNOWN_IPO_CONFIG_HASHES: dict[str, str] = {
+    "1.0.0": "a2f7e09abbcbc9c9",  # IPO base breakout (spec initial defaults + engineering assumptions)
 }
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()
 DEFAULT_VCP_CONFIG = VCPConfig()
 DEFAULT_CONFLUENCE_CONFIG = ConfluenceConfig()
+DEFAULT_IPO_CONFIG = IPOConfig()

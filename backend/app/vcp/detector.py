@@ -1,49 +1,54 @@
-"""Volatility Contraction Pattern (VCP) on completed daily candles.
+"""Volatility Contraction Pattern (VCP) on completed daily candles - detector v2.
 
-Source principles (Mark Minervini, *Think & Trade Like a Champion*; ChartMill VCP
-notes): a base inside an uptrend whose successive pullbacks get smaller (two to
-four contractions typical, up to six), with volume generally drying up, a tight
-final contraction, a pivot at the final contraction's high and a breakout above
-it on expanding volume. Every number below is a configurable engineering
-threshold in ``VCPConfig`` (docs/vcp-methodology.md separates the two).
+Methodology (Mark Minervini, *Trade Like a Stock Market Wizard*, 2013, ch. 10
+"Mastering the Volatility Contraction Pattern"; *Think & Trade Like a Champion*,
+2017; docs/vcp-methodology.md lists the secondary sources used to cross-check):
+
+* the base forms inside an established **uptrend**;
+* price corrects in a series of **successive contractions** T1 > T2 > T3 ...,
+  each pullback smaller than the previous one (often roughly half), typically
+  two to four, occasionally five or six;
+* **volume contracts / dries up** as the contractions tighten, most of all in
+  the final contraction;
+* the **pivot** is the high of the final, tight contraction; the breakout is a
+  close above it on **expanding volume**.
+
+Every number is a configurable ENGINEERING threshold in ``VCPConfig`` (initial
+defaults from the task: base 15-120 sessions, contraction >= 3 %, next <= 0.75 x
+previous, final <= 10 %, final volume <= 0.70 x the 50-day average, near pivot
+3 %, breakout volume 1.5 x) - not universal Minervini rules.
+
+This is a structure detector, never a volatility box: a range whose swings keep
+the same depth (a rectangle) or deepen is not a VCP.
 
 Algorithm for one candidate base start ``s0`` (a confirmed swing high that is
 the highest high of the previous ``base_start_high_lookback`` sessions, after a
 preceding advance of at least ``prior_advance_min_pct``), walking the candles
-left to right and using a swing high only once it is confirmed (k later bars):
+left to right and using a swing high only from the candle that confirms it
+(k later bars), so nothing is ever read from the future:
 
-* A **contraction** runs from a contraction high to the lowest low before the
-  next contraction high: ``depth % = (high - low) / high x 100``.
-* A confirmed swing high starts the **next** contraction only when the pullback
-  before it is meaningful (``>= min_contraction_depth_pct``) and the swing high
-  recovered at least ``min_recovery_frac`` of that pullback. A smaller bounce is
-  part of the same contraction; after a negligible dip a higher swing high
-  simply restarts the contraction from the higher high.
-* The **pivot** is the high of the final contraction (its starting swing high),
-  not automatically the highest price of the base.
-* **Qualified** (all gates): 2-6 meaningful contractions; every depth <=
-  ``contraction_ratio_max`` x the previous one; final depth <=
-  ``final_max_depth_pct``; mean volume of the final contraction <=
-  ``volume_final_vs_first_max`` x that of T1; base length within
-  [min_base_sessions, max_base_sessions].
-* **Invalidated** before a breakout: a contraction deeper than allowed
-  (expanding volatility) or a close below the base low; the base high exceeded
-  (``base_high_tolerance_pct``) before the structure qualified.
-* **Breakout**: a completed close above the pivot (+ buffer) while qualified, on
-  volume >= ``breakout_volume_ratio`` x the previous 50-session average
-  (one-close or two-close mode). Without that volume: *Pivot crossed - volume
-  not confirmed*. After a breakout: *Failed Breakout* after
-  ``failed_breakout_closes`` consecutive closes back below the pivot,
-  *Invalidated* on a close below the final contraction low.
+* a **contraction** runs from a contraction high to the lowest low before the
+  next contraction high: ``depth % = (high - low) / high x 100``;
+* a confirmed swing high starts the **next** contraction only when the pullback
+  before it is meaningful (>= ``min_contraction_pct``) and the swing high
+  recovered at least ``min_recovery_frac`` of it (a bounce inside a decline is
+  part of the same contraction);
+* the running (final) contraction's low is provisional until it is a confirmed
+  swing low;
+* **Invalidated** before a breakout: the running contraction deepens beyond
+  ``max_next_contraction_ratio`` x the previous one (volatility expanding), a
+  close below the base low, or the base high exceeded before the structure
+  qualified.
 
-Statuses at the latest candle: developing (one contraction so far), forming
-(contracting structure, final contraction not yet tight or volume not yet
-dried up), tightening (qualified), near_pivot (qualified, close within
-``near_pivot_pct`` below the pivot), breakout, breakout_pending (two-close mode),
-pivot_cross_low_volume, failed_breakout, invalidated.
+Statuses at the latest candle: developing (fewer than ``min_contractions``),
+forming (contracting, but the final contraction is not tight yet or volume has
+not dried up), final_contraction (all gates pass), near_pivot (qualified, close
+within ``near_pivot_pct`` below the pivot - or above it without breakout
+volume), breakout (close above the pivot on >= ``breakout_volume_ratio`` x the
+50-day average volume), failed_breakout, invalidated.
 
-Weekly candles are never mixed into this calculation; Stage Analysis is a
-separate trend-context filter applied by the API.
+Weekly candles are never mixed in; Stage Analysis is a separate trend-context
+filter applied by the API.
 """
 
 from __future__ import annotations
@@ -60,18 +65,17 @@ from ..indicators.core import atr_wilder, swing_points
 from ..timeutil import epoch_s, iso
 
 STATUS_LABELS = {
-    "developing": "Developing VCP",
-    "forming": "Forming VCP",
-    "tightening": "Tightening / Final Contraction",
+    "developing": "Developing",
+    "forming": "Forming",
+    "final_contraction": "Final Contraction",
     "near_pivot": "Near Pivot",
     "breakout": "Breakout",
-    "breakout_pending": "Breakout (awaiting 2nd close)",
-    "pivot_cross_low_volume": "Pivot crossed - volume not confirmed",
     "failed_breakout": "Failed Breakout",
     "invalidated": "Invalidated",
 }
-STATUS_RANK = {"breakout": 0, "breakout_pending": 1, "near_pivot": 2, "tightening": 3, "pivot_cross_low_volume": 4, "forming": 5, "failed_breakout": 6, "developing": 7, "invalidated": 8}
-QUALIFIED_STATUSES = ("tightening", "near_pivot", "breakout", "breakout_pending", "pivot_cross_low_volume", "failed_breakout")
+STATUS_RANK = {"breakout": 0, "near_pivot": 1, "final_contraction": 2, "forming": 3, "failed_breakout": 4, "developing": 5, "invalidated": 6}
+QUALIFIED_STATUSES = ("final_contraction", "near_pivot", "breakout", "failed_breakout")
+SCHEMA = "vcp-2.0"
 
 
 def _r(x: Any, nd: int = 4) -> float | None:
@@ -123,11 +127,22 @@ def _avg_prev(v: np.ndarray, i: int, n: int) -> float | None:
     return float(win.mean())
 
 
-def _vol_stats(ctx: _Ctx, a: int, b: int) -> tuple[float | None, float | None]:
-    """Mean / min known volume of candles a..b (a contraction: the candles after its high through its low)."""
+def _vol_stats(ctx: _Ctx, a: int, b: int) -> tuple[float | None, float | None, float | None]:
+    """Mean / median / min known volume of candles a..b (a contraction: the candles after its high through its low)."""
     w = ctx.v[a : b + 1]
     w = w[np.isfinite(w)]
-    return (float(w.mean()), float(w.min())) if len(w) else (None, None)
+    return (float(w.mean()), float(np.median(w)), float(w.min())) if len(w) else (None, None, None)
+
+
+def _final_volume(ctx: _Ctx, final: Contraction, end: int) -> tuple[float | None, float | None, float | None]:
+    """Final contraction: mean volume of its candles (after its high through ``end``),
+    the 50-session average before it started, and their ratio."""
+    a = final.hi_i + 1
+    w = ctx.v[a : end + 1] if end >= a else ctx.v[final.hi_i : final.hi_i + 1]
+    w = w[np.isfinite(w)]
+    mean = float(w.mean()) if len(w) else None
+    a50 = _avg_prev(ctx.v, final.hi_i, ctx.cfg.volume_avg_lookback)
+    return mean, a50, (mean / a50) if (mean is not None and a50) else None
 
 
 def _gates(ctx: _Ctx, cons: list[Contraction], s0: int, end: int) -> list[dict[str, Any]]:
@@ -139,17 +154,19 @@ def _gates(ctx: _Ctx, cons: list[Contraction], s0: int, end: int) -> list[dict[s
         g.append({"name": name, "passed": passed, "value": value, "rule": rule, "basis": basis})
 
     nc = len(cons)
-    add("contraction_count", cfg.min_contractions <= nc <= cfg.max_contractions, nc, f"{cfg.min_contractions}-{cfg.max_contractions} meaningful contractions", "source")
+    add("contraction_count", cfg.min_contractions <= nc <= cfg.max_contractions, nc, f"{cfg.min_contractions}-{cfg.max_contractions} contractions (each >= {cfg.min_contraction_pct} %)", "source")
     ratios = [cons[i + 1].depth_pct / cons[i].depth_pct for i in range(nc - 1)]
-    add("progressive_contraction", bool(ratios) and all(r <= cfg.contraction_ratio_max for r in ratios), [round(r, 3) for r in ratios], f"each depth <= {cfg.contraction_ratio_max} x the previous (T1 > T2 > ...)")
+    add("progressive_contraction", bool(ratios) and all(r <= cfg.max_next_contraction_ratio for r in ratios), [round(r, 3) for r in ratios], f"each depth <= {cfg.max_next_contraction_ratio} x the previous (T1 > T2 > ...)")
     final = cons[-1] if cons else None
-    add("tight_final_contraction", final is not None and final.depth_pct <= cfg.final_max_depth_pct, _r(final.depth_pct, 2) if final else None, f"final depth <= {cfg.final_max_depth_pct} %")
+    add("tight_final_contraction", final is not None and final.depth_pct <= cfg.max_final_contraction_pct, _r(final.depth_pct, 2) if final else None, f"final depth <= {cfg.max_final_contraction_pct} %")
+    fr = _final_volume(ctx, final, end)[2] if final else None
+    add("volume_dry_up", None if fr is None else fr <= cfg.final_volume_ratio, _r(fr, 3), f"final contraction mean volume <= {cfg.final_volume_ratio} x the 50-session average before it")
     vf = _vol_stats(ctx, final.hi_i + 1, final.lo_i)[0] if final else None
     v1 = _vol_stats(ctx, cons[0].hi_i + 1, cons[0].lo_i)[0] if cons else None
     vr = (vf / v1) if (vf is not None and v1) else None
-    add("volume_dry_up", None if vr is None else vr <= cfg.volume_final_vs_first_max, _r(vr, 3), f"final contraction mean volume <= {cfg.volume_final_vs_first_max} x T1 mean volume")
+    add("volume_contracting", None if vr is None else vr <= cfg.volume_final_vs_first_max, _r(vr, 3), f"final contraction mean volume <= {cfg.volume_final_vs_first_max} x T1's")
     base_len = end - s0
-    add("base_length", cfg.min_base_sessions <= base_len <= cfg.max_base_sessions, base_len, f"{cfg.min_base_sessions}-{cfg.max_base_sessions} sessions from the first contraction high")
+    add("base_length", cfg.min_base_bars <= base_len <= cfg.max_base_bars, base_len, f"{cfg.min_base_bars}-{cfg.max_base_bars} sessions from the first contraction high")
     return g
 
 
@@ -196,7 +213,7 @@ def _walk(ctx: _Ctx, s0: int, highs: list[int]) -> dict[str, Any]:
                 out.update(pivot=cur, pivot_i=cur_i, live=con)
                 out["invalid"] = (j, f"a swing high {p:.2f} exceeded the base high {H0:.2f} by more than {cfg.base_high_tolerance_pct} % before the VCP qualified")
                 return out
-            if con.depth_pct < cfg.min_contraction_depth_pct:
+            if con.depth_pct < cfg.min_contraction_pct:
                 if p >= cur:
                     cur_i, cur = i, p
                 continue
@@ -204,12 +221,12 @@ def _walk(ctx: _Ctx, s0: int, highs: list[int]) -> dict[str, Any]:
                 closed.append(con)
                 cur_i, cur = i, p
         run = _current(ctx, cur_i, cur, j - 1)
-        cons = closed + ([run] if run is not None and run.depth_pct >= cfg.min_contraction_depth_pct else [])
+        cons = closed + ([run] if run is not None and run.depth_pct >= cfg.min_contraction_pct else [])
         # Expanding volatility: the running contraction is deeper than allowed.
         live = _current(ctx, cur_i, cur, j)
-        if closed and live is not None and live.depth_pct >= cfg.min_contraction_depth_pct and live.depth_pct > cfg.contraction_ratio_max * closed[-1].depth_pct:
+        if closed and live is not None and live.depth_pct >= cfg.min_contraction_pct and live.depth_pct > cfg.max_next_contraction_ratio * closed[-1].depth_pct:
             out.update(pivot=cur, pivot_i=cur_i, live=live)
-            out["invalid"] = (j, f"contraction from {cur:.2f} reached {live.depth_pct:.1f} % > {cfg.contraction_ratio_max} x the previous {closed[-1].depth_pct:.1f} % (volatility expanding)")
+            out["invalid"] = (j, f"contraction from {cur:.2f} reached {live.depth_pct:.1f} % > {cfg.max_next_contraction_ratio} x the previous {closed[-1].depth_pct:.1f} % (volatility expanding)")
             return out
         base_low = float(np.min(l[s0 + 1 : j])) if j > s0 + 1 else float(l[s0])
         inv_buf = cfg.invalidation_buffer_atr * (float(ctx.atr[j]) if np.isfinite(ctx.atr[j]) else 0.0)
@@ -219,7 +236,7 @@ def _walk(ctx: _Ctx, s0: int, highs: list[int]) -> dict[str, Any]:
             return out
         buf = cfg.breakout_buffer_atr * (float(ctx.atr[j]) if np.isfinite(ctx.atr[j]) else 0.0)
         if c[j] > cur + buf:
-            gates = _gates(ctx, cons, s0, j)
+            gates = _gates(ctx, cons, s0, j - 1)
             if _qualified(gates):
                 out["breakout"] = {"i": j, "pivot": cur, "pivot_i": cur_i, "contractions": cons, "gates": gates, "buffer": buf}
                 return out
@@ -231,25 +248,28 @@ def _walk(ctx: _Ctx, s0: int, highs: list[int]) -> dict[str, Any]:
     return out
 
 
-def _post_breakout(ctx: _Ctx, b: int, pivot: float, final: Contraction) -> tuple[str, int | None, str | None]:
+def _post_breakout(ctx: _Ctx, b: int, pivot: float, final: Contraction) -> tuple[str, int | None, str | None, str]:
+    """(status, event index, reason, confirmation) after a volume-confirmed breakout."""
     cfg = ctx.cfg
     c = ctx.c
     n = len(c)
+    confirmation = "one_close"
     if cfg.breakout_confirm_closes >= 2:
         if b == n - 1:
-            return "breakout_pending", None, "first close above the pivot; waiting for the second"
+            return "breakout", None, "first close above the pivot; awaiting the second close", "pending"
         buf = cfg.breakout_buffer_atr * (float(ctx.atr[b]) if np.isfinite(ctx.atr[b]) else 0.0)
         if c[b + 1] <= pivot + buf:
-            return "failed_breakout", b + 1, "second close back at or below the pivot"
+            return "failed_breakout", b + 1, "second close back at or below the pivot", "failed"
+        confirmation = "two_closes"
     below = 0
     for j in range(b + 1, n):
         inv_buf = cfg.invalidation_buffer_atr * (float(ctx.atr[j]) if np.isfinite(ctx.atr[j]) else 0.0)
         if c[j] < final.lo - inv_buf:
-            return "invalidated", j, f"close {c[j]:.2f} below the final contraction low {final.lo:.2f}"
+            return "invalidated", j, f"close {c[j]:.2f} below the final contraction low {final.lo:.2f}", confirmation
         below = below + 1 if c[j] < pivot else 0
         if below >= cfg.failed_breakout_closes:
-            return "failed_breakout", j, f"{below} consecutive closes back below the pivot {pivot:.2f}"
-    return "breakout", None, None
+            return "failed_breakout", j, f"{below} consecutive closes back below the pivot {pivot:.2f}", confirmation
+    return "breakout", None, None, confirmation
 
 
 def _sma(c: np.ndarray, n: int) -> float | None:
@@ -258,64 +278,94 @@ def _sma(c: np.ndarray, n: int) -> float | None:
     return float(np.mean(c[-n:]))
 
 
-def _score(ctx: _Ctx, cons: list[Contraction], H0: float, pivot: float, advance_pct: float, end: int) -> tuple[float, list[dict[str, Any]], dict[str, Any]]:
+def _score(ctx: _Ctx, cons: list[Contraction], H0: float, pivot: float, advance_pct: float, s0: int, end: int, dry_days: int | None) -> tuple[float, list[dict[str, Any]], dict[str, Any]]:
     cfg = ctx.cfg
     w = cfg.weights
     comps: list[dict[str, Any]] = []
-    extra: dict[str, Any] = {}
     nc = len(cons)
+
+    def ratio_score(x: float | None) -> float | None:
+        return None if x is None else _clamp((cfg.score_volume_zero - x) / (cfg.score_volume_zero - cfg.score_volume_full))
+
+    # 1. contraction progression (30)
     ratios = [cons[i + 1].depth_pct / cons[i].depth_pct for i in range(nc - 1)]
     if ratios:
         mean_r = float(np.mean(ratios))
-        shrink = _clamp((cfg.contraction_ratio_max - mean_r) / (cfg.contraction_ratio_max - cfg.score_ratio_ideal))
+        shrink = _clamp((cfg.max_next_contraction_ratio - mean_r) / (cfg.max_next_contraction_ratio - cfg.score_ratio_ideal))
+        mono = sum(r < 1.0 for r in ratios) / len(ratios)
     else:
-        mean_r, shrink = None, 0.0
+        mean_r, shrink, mono = None, 0.0, 0.0
     count_f = {1: 0.3, 2: 0.8, 3: 1.0, 4: 1.0, 5: 0.9, 6: 0.8}.get(nc, 0.5)
-    prog = 0.7 * shrink + 0.3 * count_f
-    comps.append({"name": "contraction_progression", "weight": w["contraction_progression"], "raw": _r(mean_r, 3), "score": round(prog, 4), "formula": f"0.7 x clamp(({cfg.contraction_ratio_max} - mean depth ratio) / ({cfg.contraction_ratio_max} - {cfg.score_ratio_ideal})) + 0.3 x count factor ({nc} contractions -> {count_f})"})
+    prog = 0.6 * shrink + 0.25 * count_f + 0.15 * mono
+    comps.append({"name": "contraction_progression", "weight": w["contraction_progression"], "raw": _r(mean_r, 3), "score": round(prog, 4), "formula": f"0.6 x shrink (mean depth ratio {cfg.score_ratio_ideal} -> 1, {cfg.max_next_contraction_ratio} -> 0) + 0.25 x count factor ({nc} -> {count_f}) + 0.15 x share of shrinking steps"})
+    # 2. final contraction (20)
+    fin = cons[-1] if cons else None
+    fd = fin.depth_pct if fin else None
+    depth_part = _clamp((cfg.max_final_contraction_pct - fd) / (cfg.max_final_contraction_pct - cfg.score_tight_full_pct)) if fd is not None else 0.0
+    a_fin = float(ctx.atr[fin.hi_i]) if fin is not None and np.isfinite(ctx.atr[fin.hi_i]) and ctx.atr[fin.hi_i] > 0 else None
+    fin_atr = (fin.depth / a_fin) if (fin is not None and a_fin) else None
+    atr_part = _clamp((cfg.score_final_atr_zero - fin_atr) / (cfg.score_final_atr_zero - cfg.score_final_atr_full)) if fin_atr is not None else None
+    parts = [depth_part] + ([atr_part] if atr_part is not None else [])
+    fscore = float(np.mean(parts))
+    comps.append({"name": "final_contraction", "weight": w["final_contraction"], "raw": _r(fd, 2), "score": round(fscore, 4), "formula": f"mean of: depth ({cfg.score_tight_full_pct} % -> 1, {cfg.max_final_contraction_pct} % -> 0); range / ATR ({cfg.score_final_atr_full} -> 1, {cfg.score_final_atr_zero} -> 0)"})
+    # 3. volume behaviour (20)
     vols = [_vol_stats(ctx, x.hi_i + 1, x.lo_i)[0] for x in cons]
-    v_first, v_final = (vols[0], vols[-1]) if vols else (None, None)
-    trend = (v_final / v_first) if (v_first and v_final is not None) else None
-    a50 = _avg_prev(ctx.v, cons[-1].hi_i, cfg.volume_avg_lookback) if cons else None
-    final_vs_avg = (v_final / a50) if (a50 and v_final is not None) else None
-    parts = []
-    if trend is not None:
-        parts.append(_clamp((cfg.volume_final_vs_first_max - trend) / (cfg.volume_final_vs_first_max - cfg.score_volume_trend_full)))
-    if final_vs_avg is not None:
-        parts.append(_clamp((cfg.score_final_vs_avg_zero - final_vs_avg) / (cfg.score_final_vs_avg_zero - cfg.score_final_vs_avg_full)))
+    v_first = vols[0] if vols else None
+    fin_mean, a50, fin_vs_avg = _final_volume(ctx, fin, end) if fin else (None, None, None)
+    trend = (fin_mean / v_first) if (v_first and fin_mean is not None) else None
+    vparts = [x for x in (ratio_score(fin_vs_avg), ratio_score(trend)) if x is not None]
     steps = [vols[i + 1] < vols[i] for i in range(len(vols) - 1) if vols[i] is not None and vols[i + 1] is not None]
     if steps:
-        parts.append(sum(steps) / len(steps))
-    vol_score = float(np.mean(parts)) if parts else 0.0
-    comps.append({"name": "volume_contraction", "weight": w["volume_contraction"], "raw": _r(trend, 3), "score": round(vol_score, 4), "formula": "mean of: final/T1 volume (1 at <= {:.2f}, 0 at {:.2f}); final volume / prior 50-day average (1 at <= {:.2f}, 0 at {:.2f}); share of contractions with lower volume than the previous".format(cfg.score_volume_trend_full, cfg.volume_final_vs_first_max, cfg.score_final_vs_avg_full, cfg.score_final_vs_avg_zero)})
-    fd = cons[-1].depth_pct if cons else None
-    tight = _clamp((cfg.final_max_depth_pct - fd) / (cfg.final_max_depth_pct - cfg.score_tight_full_pct)) if fd is not None else 0.0
-    comps.append({"name": "final_tightness", "weight": w["final_tightness"], "raw": _r(fd, 2), "score": round(tight, 4), "formula": f"1 at final depth <= {cfg.score_tight_full_pct} %, 0 at {cfg.final_max_depth_pct} %"})
+        vparts.append(sum(steps) / len(steps))
+    if dry_days is not None:
+        vparts.append(min(1.0, dry_days / 3.0))
+    vscore = float(np.mean(vparts)) if vparts else 0.0
+    comps.append({"name": "volume_behaviour", "weight": w["volume_behaviour"], "raw": _r(fin_vs_avg, 3), "score": round(vscore, 4), "formula": f"mean of: final / 50-day average and final / T1 volume ({cfg.score_volume_full} -> 1, {cfg.score_volume_zero} -> 0); share of contractions quieter than the previous; dry-up days (3+ -> 1)"})
+    # 4. base structure (10)
+    lo_ideal, hi_ideal = cfg.score_t1_depth_ideal
+    t1 = cons[0].depth_pct if cons else None
+    if t1 is None:
+        t1_part = 0.0
+    elif t1 < lo_ideal:
+        t1_part = _clamp(t1 / lo_ideal)
+    elif t1 <= hi_ideal:
+        t1_part = 1.0
+    else:
+        t1_part = _clamp((50.0 - t1) / (50.0 - hi_ideal))
+    blen = end - s0
+    b_lo, b_hi = cfg.score_base_bars_ideal
+    len_part = 1.0 if b_lo <= blen <= b_hi else 0.5
+    lows = [x.lo for x in cons]
+    hl = (sum(lows[i + 1] > lows[i] for i in range(len(lows) - 1)) / (len(lows) - 1)) if len(lows) >= 2 else 0.0
+    bscore = float(np.mean([t1_part, len_part, hl]))
+    comps.append({"name": "base_structure", "weight": w["base_structure"], "raw": _r(t1, 2), "score": round(bscore, 4), "formula": f"mean of: T1 depth inside {lo_ideal}-{hi_ideal} % (ASSUMPTION); base length inside {b_lo}-{b_hi} sessions; share of rising contraction lows"})
+    # 5. trend context (10)
     c_end = ctx.c[: end + 1]
-    s50, s200 = _sma(c_end, 50), _sma(c_end, 200)
+    s50, s150, s200 = _sma(c_end, 50), _sma(c_end, 150), _sma(c_end, 200)
     tparts = [_clamp((advance_pct - cfg.prior_advance_min_pct) / (cfg.score_advance_full_pct - cfg.prior_advance_min_pct))]
     if s50 is not None:
         tparts.append(1.0 if c_end[-1] > s50 else 0.0)
-    if s50 is not None and s200 is not None:
-        tparts.append(1.0 if s50 > s200 else 0.0)
-    lows = [x.lo for x in cons]
-    if len(lows) >= 2:
-        tparts.append(sum(lows[i + 1] > lows[i] for i in range(len(lows) - 1)) / (len(lows) - 1))
-    trend_score = float(np.mean(tparts))
-    comps.append({"name": "base_trend", "weight": w["base_trend"], "raw": _r(advance_pct, 2), "score": round(trend_score, 4), "formula": f"mean of: preceding advance ({cfg.prior_advance_min_pct} % -> 0, {cfg.score_advance_full_pct} % -> 1); close > SMA50; SMA50 > SMA200; share of rising contraction lows"})
+    if s50 is not None and s150 is not None and s200 is not None:
+        tparts.append(1.0 if s50 > s150 > s200 else 0.0)
+    if len(c_end) >= 221:
+        prev200 = float(np.mean(c_end[-221:-21]))
+        tparts.append(1.0 if s200 is not None and s200 > prev200 else 0.0)
+    tscore = float(np.mean(tparts))
+    comps.append({"name": "trend_context", "weight": w["trend_context"], "raw": _r(advance_pct, 2), "score": round(tscore, 4), "formula": f"mean of: preceding advance ({cfg.prior_advance_min_pct} % -> 0, {cfg.score_advance_full_pct} % -> 1); close > SMA50; SMA50 > SMA150 > SMA200; SMA200 rising over 21 sessions (Trend Template style, ENGINEERING)"})
+    # 6. pivot quality (10)
     gap = max(0.0, (H0 - pivot) / H0 * 100.0)
     piv_score = _clamp((cfg.score_pivot_gap_zero_pct - gap) / (cfg.score_pivot_gap_zero_pct - cfg.score_pivot_gap_full_pct))
     comps.append({"name": "pivot_quality", "weight": w["pivot_quality"], "raw": _r(gap, 2), "score": round(piv_score, 4), "formula": f"pivot within {cfg.score_pivot_gap_full_pct} % of the base's first high -> 1, {cfg.score_pivot_gap_zero_pct} % or more below -> 0"})
     total_w = sum(x["weight"] for x in comps)
     quality = 100.0 * sum(x["weight"] * x["score"] for x in comps) / total_w if total_w else 0.0
-    extra.update(volumes=vols, volume_trend=trend, final_vs_avg50=final_vs_avg, sma50=s50, sma200=s200, mean_depth_ratio=mean_r, pivot_gap_pct=gap, higher_lows=(all(lows[i + 1] > lows[i] for i in range(len(lows) - 1)) if len(lows) >= 2 else None))
+    extra = dict(volumes=vols, volume_trend=trend, final_vs_avg50=fin_vs_avg, final_volume=fin_mean, avg50_before_final=a50, final_range_atr=fin_atr, sma50=s50, sma150=s150, sma200=s200, mean_depth_ratio=mean_r, pivot_gap_pct=gap, higher_lows=(all(lows[i + 1] > lows[i] for i in range(len(lows) - 1)) if len(lows) >= 2 else None))
     return round(quality, 2), comps, extra
 
 
 def detect_vcp(frame: pd.DataFrame, cfg: VCPConfig, symbol: str = "", atr: np.ndarray | None = None, config_hash: str = "") -> dict[str, Any] | None:
     """VCP of the latest completed daily candle: the best candidate base, or None."""
     n = len(frame)
-    if n < cfg.min_base_sessions + cfg.swing_k + 2:
+    if n < cfg.min_base_bars + cfg.swing_k + 2:
         return None
     h, l, c, v = (frame[k].to_numpy(dtype=float) for k in ("high", "low", "close", "volume"))
     if atr is None:
@@ -323,17 +373,17 @@ def detect_vcp(frame: pd.DataFrame, cfg: VCPConfig, symbol: str = "", atr: np.nd
     sp = swing_points(h, l, cfg.swing_k)
     ctx = _Ctx(h, l, c, v, np.asarray(atr, dtype=float), frame.index, set(int(i) for i in sp.lows), cfg)
     highs = [int(i) for i in sp.highs]
-    lo_start = max(0, n - 1 - cfg.max_base_sessions - cfg.post_breakout_track_sessions)
+    lo_start = max(0, n - 1 - cfg.max_base_bars - cfg.post_breakout_track_sessions)
     cands = []
     for s0 in highs:
-        if s0 < lo_start or n - 1 - s0 < cfg.min_base_sessions:
+        if s0 < lo_start or n - 1 - s0 < cfg.min_base_bars:
             continue
         lb = h[max(0, s0 - cfg.base_start_high_lookback) : s0]
         if len(lb) and h[s0] < lb.max():
             continue  # the base starts at a high
         prior = l[max(0, s0 - cfg.prior_trend_lookback) : s0]
-        if len(prior) < cfg.swing_k:
-            continue
+        if s0 < cfg.min_prior_bars or len(prior) < cfg.swing_k:
+            continue  # no measurable preceding uptrend (e.g. a fresh listing)
         advance = (h[s0] / prior.min() - 1.0) * 100.0
         if advance < cfg.prior_advance_min_pct:
             continue
@@ -358,6 +408,7 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
     brk = walk["breakout"]
     breakout_info = None
     event_i = None
+    flags: dict[str, Any] = {"pivot_crossed_low_volume": False, "confirmation": None}
     if brk is not None:
         b = brk["i"]
         cons: list[Contraction] = brk["contractions"]
@@ -368,20 +419,25 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
         vol_ok = bool(vr is not None and vr >= cfg.breakout_volume_ratio)
         if n - 1 - b > cfg.post_breakout_track_sessions:
             return None  # an old breakout is history, not a current VCP
+        st2, ei2, rs2, conf = _post_breakout(ctx, b, pivot, cons[-1])
         if vol_ok:
-            status, event_i, reason = _post_breakout(ctx, b, pivot, cons[-1])
+            status, event_i, reason = st2, ei2, rs2
+            flags["confirmation"] = conf
+        elif st2 in ("failed_breakout", "invalidated"):
+            status, event_i, reason = st2, ei2, rs2
         else:
-            status, reason = "pivot_cross_low_volume", f"close above the pivot on {vr if vr is None else round(vr, 2)}x the 50-day average volume (needs >= {cfg.breakout_volume_ratio}x)"
-            st2, ei2, rs2 = _post_breakout(ctx, b, pivot, cons[-1])
-            if st2 in ("failed_breakout", "invalidated"):
-                status, event_i, reason = st2, ei2, rs2
-        breakout_info = {"i": b, "t": epoch_s(times[b]), "time": iso(times[b]), "close": _r(c[b]), "volume_ratio": _r(vr, 3), "volume_ok": vol_ok, "buffer": _r(brk["buffer"])}
+            # A close above the pivot without breakout volume is not a breakout (spec): the
+            # setup stays at the pivot, flagged.
+            status = "near_pivot"
+            flags["pivot_crossed_low_volume"] = True
+            reason = f"closed above the pivot on {vr if vr is None else round(vr, 2)}x the 50-day average volume (a breakout needs >= {cfg.breakout_volume_ratio}x)"
+        breakout_info = {"i": b, "t": epoch_s(times[b]), "time": iso(times[b]), "close": _r(c[b]), "volume": _r(ctx.v[b], 1) if np.isfinite(ctx.v[b]) else None, "volume_ratio": _r(vr, 3), "volume_ok": vol_ok, "buffer": _r(brk["buffer"])}
     elif walk["invalid"] is not None:
         j, why = walk["invalid"]
         live = walk.get("live")
-        cons = list(walk["closed"]) + ([live] if live is not None and live.depth_pct >= cfg.min_contraction_depth_pct else [])
+        cons = list(walk["closed"]) + ([live] if live is not None and live.depth_pct >= cfg.min_contraction_pct else [])
         prior = walk["closed"]
-        was_forming = len(prior) >= cfg.min_contractions and all(prior[i + 1].depth_pct <= cfg.contraction_ratio_max * prior[i].depth_pct for i in range(len(prior) - 1))
+        was_forming = len(prior) >= cfg.min_contractions and all(prior[i + 1].depth_pct <= cfg.max_next_contraction_ratio * prior[i].depth_pct for i in range(len(prior) - 1))
         if not was_forming:
             return None  # never a contracting structure: not reported as a (failed) VCP
         status, reason, event_i = "invalidated", why, j
@@ -391,15 +447,17 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
     else:
         pivot, pivot_i = walk["pivot"], walk["pivot_i"]
         run = _current(ctx, pivot_i, pivot, n - 1)
-        cons = list(walk["closed"]) + ([run] if run is not None and run.depth_pct >= cfg.min_contraction_depth_pct else [])
+        cons = list(walk["closed"]) + ([run] if run is not None and run.depth_pct >= cfg.min_contraction_pct else [])
         end = n - 1
-        if n - 1 - s0 > cfg.max_base_sessions or not cons:
+        if n - 1 - s0 > cfg.max_base_bars or not cons:
             return None  # base older than the search range without a breakout, or no pullback yet
         gates = _gates(ctx, cons, s0, end)
         progressive = next(g for g in gates if g["name"] == "progressive_contraction")["passed"]
         if _qualified(gates):
             dist = (pivot - c[-1]) / pivot * 100.0
-            status = "near_pivot" if 0.0 <= dist <= cfg.near_pivot_pct else "tightening"
+            status = "near_pivot" if dist <= cfg.near_pivot_pct else "final_contraction"
+            if dist < 0:
+                reason = "the close is above the pivot, but it crossed before the structure qualified: no breakout signal (needs a new close above the pivot on breakout volume)"
         elif len(cons) >= cfg.min_contractions and progressive:
             status = "forming"
             reason = "not yet: " + ", ".join(g["name"].replace("_", " ") for g in gates if g["passed"] is not True)
@@ -408,41 +466,66 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
         else:
             status, reason = "developing", f"{len(cons)} contraction so far (needs {cfg.min_contractions})"
     qualified = _qualified(gates)
-    quality, comps, extra = _score(ctx, cons, H0, pivot, advance, end)
     final = cons[-1]
     base_end_i = (breakout_info["i"] - 1) if breakout_info else end
+    a50_final = _avg_prev(ctx.v, final.hi_i, cfg.volume_avg_lookback)
+    fin_vol = ctx.v[final.hi_i + 1 : base_end_i + 1]
+    dry_days = int(np.sum(np.isfinite(fin_vol) & (fin_vol <= cfg.volume_dry_up_ratio * a50_final))) if a50_final else None
+    quality, comps, extra = _score(ctx, cons, H0, pivot, advance, s0, end, dry_days)
     base_low = float(np.min(ctx.l[s0 : base_end_i + 1]))
     base_high = float(np.max(ctx.h[s0 : base_end_i + 1]))
     vcp_id = hashlib.sha1(f"{symbol}|1d|{epoch_s(times[s0])}|{chash}".encode()).hexdigest()[:16]
     clist = []
+    prev_avg = None
     for k_, x in enumerate(cons):
-        avg, mn = _vol_stats(ctx, x.hi_i + 1, x.lo_i)
+        avg, med, mn = _vol_stats(ctx, x.hi_i + 1, x.lo_i)
         a50 = _avg_prev(ctx.v, x.hi_i, cfg.volume_avg_lookback)
+        a_i = float(ctx.atr[x.hi_i]) if np.isfinite(ctx.atr[x.hi_i]) and ctx.atr[x.hi_i] > 0 else None
+        nxt = cons[k_ + 1].hi_i if k_ + 1 < len(cons) else None
         clist.append(
             {
-                "seq": k_ + 1, "label": f"T{k_ + 1}",
+                "seq": k_ + 1, "label": f"T{k_ + 1}", "final": k_ == len(cons) - 1,
                 "start_i": x.hi_i, "start_t": epoch_s(times[x.hi_i]), "start_time": iso(times[x.hi_i]), "start_price": _r(x.hi),
                 "end_i": x.lo_i, "end_t": epoch_s(times[x.lo_i]), "end_time": iso(times[x.lo_i]), "end_price": _r(x.lo),
+                "high": _r(x.hi), "low": _r(x.lo),
                 "depth": _r(x.depth), "depth_pct": _r(x.depth_pct, 2), "bars": x.lo_i - x.hi_i,
-                "avg_volume": _r(avg, 1), "min_volume": _r(mn, 1), "volume_vs_avg50": _r(avg / a50, 3) if (avg is not None and a50) else None,
+                "recovery_bars": (nxt - x.lo_i) if nxt is not None else None,
+                "avg_volume": _r(avg, 1), "median_volume": _r(med, 1), "min_volume": _r(mn, 1),
+                "volume_vs_avg50": _r(avg / a50, 3) if (avg is not None and a50) else None,
+                "volume_vs_prev": _r(avg / prev_avg, 3) if (avg is not None and prev_avg) else None,
+                "atr_range": _r(x.depth / a_i, 3) if a_i else None,
                 "provisional": bool(x.provisional),
             }
         )
-    a50_final = _avg_prev(ctx.v, final.hi_i, cfg.volume_avg_lookback)
-    fin_end = base_end_i
-    fin_vol = ctx.v[final.hi_i + 1 : fin_end + 1]
-    dry_days = int(np.sum(np.isfinite(fin_vol) & (fin_vol <= cfg.volume_dry_up_ratio * a50_final))) if a50_final else None
+        prev_avg = avg if avg is not None else prev_avg
     last = n - 1
     dist_pct = (pivot - c[last]) / pivot * 100.0
-    explanation = _explain(cfg, status, reason, cons, gates, advance, H0, pivot, breakout_info, dry_days, extra)
+    explanation = _explain(cfg, status, reason, cons, gates, advance, H0, pivot, breakout_info, dry_days, extra, flags)
+    swings = []
+    for x in clist:
+        swings.append({"t": x["start_t"], "i": x["start_i"], "p": x["start_price"], "kind": "high", "label": f"{x['label']} high"})
+        swings.append({"t": x["end_t"], "i": x["end_i"], "p": x["end_price"], "kind": "low", "label": f"{x['label']} low{' (provisional)' if x['provisional'] else ''}"})
     geometry = {
-        "schema_version": "vcp-1.0",
+        "schema_version": SCHEMA,
         "vcp_id": vcp_id,
         "timeframe": "1d",
         "price_basis": "raw_split_adjusted",
         "base": {"i_start": s0, "t_start": epoch_s(times[s0]), "i_end": base_end_i, "t_end": epoch_s(times[base_end_i]), "p_high": _r(base_high), "p_low": _r(base_low)},
-        "contractions": [{"seq": x["seq"], "label": x["label"], "i_high": x["start_i"], "t_high": x["start_t"], "p_high": x["start_price"], "i_low": x["end_i"], "t_low": x["end_t"], "p_low": x["end_price"], "depth_pct": x["depth_pct"], "volume_vs_avg50": x["volume_vs_avg50"], "provisional": x["provisional"]} for x in clist],
+        "contractions": [
+            {
+                "seq": x["seq"], "label": x["label"], "final": x["final"],
+                "i_high": x["start_i"], "t_high": x["start_t"], "p_high": x["start_price"],
+                "i_low": x["end_i"], "t_low": x["end_t"], "p_low": x["end_price"],
+                "depth_pct": x["depth_pct"], "bars": x["bars"], "volume_vs_avg50": x["volume_vs_avg50"], "atr_range": x["atr_range"], "provisional": x["provisional"],
+            }
+            for x in clist
+        ],
+        "swings": swings,
         "pivot": {"i": pivot_i, "t": epoch_s(times[pivot_i]), "p": _r(pivot), "t_end": epoch_s(times[last]), "i_end": last},
+        "dry_up": {
+            "t_start": epoch_s(times[min(final.hi_i + 1, base_end_i)]), "t_end": epoch_s(times[base_end_i]),
+            "volume_ratio": _r(extra.get("final_vs_avg50"), 3), "dry_up_days": dry_days, "passed": bool(extra.get("final_vs_avg50") is not None and extra["final_vs_avg50"] <= cfg.final_volume_ratio),
+        },
         "breakout": breakout_info,
         "event": {"i": event_i, "t": epoch_s(times[event_i]), "status": status} if event_i is not None else None,
         "last_candle": {"i": last, "t": epoch_s(times[last]), "p": _r(c[last])},
@@ -479,25 +562,32 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
         "breakout_age": (last - breakout_info["i"]) if breakout_info else None,
         "breakout_volume_ratio": breakout_info["volume_ratio"] if breakout_info else None,
         "event_time": iso(times[event_i]) if event_i is not None else None,
+        "pivot_crossed_low_volume": flags["pivot_crossed_low_volume"],
+        "breakout_confirmation": flags["confirmation"],
         "metrics": {
             "prior_advance_pct": _r(advance, 2),
             "dry_up_days_final": dry_days,
-            "volume_trend_final_vs_first": _r(extra.get("volume_trend"), 3),
             "final_volume_vs_avg50": _r(extra.get("final_vs_avg50"), 3),
+            "volume_trend_final_vs_first": _r(extra.get("volume_trend"), 3),
+            "final_range_atr": _r(extra.get("final_range_atr"), 3),
             "contraction_volumes": [_r(x, 1) for x in extra.get("volumes", [])],
             "mean_depth_ratio": _r(extra.get("mean_depth_ratio"), 3),
             "pivot_gap_from_first_high_pct": _r(extra.get("pivot_gap_pct"), 2),
             "higher_lows": extra.get("higher_lows"),
             "sma50": _r(extra.get("sma50")),
+            "sma150": _r(extra.get("sma150")),
             "sma200": _r(extra.get("sma200")),
             "atr": _r(ctx.atr[last]),
+            "footprint": f"{base_end_i - s0}D {cons[0].depth_pct:.0f}/{final.depth_pct:.0f} {len(cons)}T",
+            "pivot_crossed_low_volume": flags["pivot_crossed_low_volume"],
+            "breakout_confirmation": flags["confirmation"],
         },
         "explanation": explanation,
         "geometry": geometry,
     }
 
 
-def _explain(cfg: VCPConfig, status: str, reason: str | None, cons: list[Contraction], gates: list[dict[str, Any]], advance: float, H0: float, pivot: float, brk: dict[str, Any] | None, dry_days: int | None, extra: dict[str, Any]) -> list[str]:
+def _explain(cfg: VCPConfig, status: str, reason: str | None, cons: list[Contraction], gates: list[dict[str, Any]], advance: float, H0: float, pivot: float, brk: dict[str, Any] | None, dry_days: int | None, extra: dict[str, Any], flags: dict[str, Any]) -> list[str]:
     out = [f"Status: {STATUS_LABELS[status]}" + (f" - {reason}" if reason else "") + "."]
     out.append(f"Preceding advance into the base: {advance:.1f} % (needs >= {cfg.prior_advance_min_pct} %, ENGINEERING assumption).")
     depths = " > ".join(f"T{i + 1} {x.depth_pct:.1f} %" for i, x in enumerate(cons))
@@ -505,11 +595,15 @@ def _explain(cfg: VCPConfig, status: str, reason: str | None, cons: list[Contrac
     vols = extra.get("volumes") or []
     if vols and all(x is not None for x in vols):
         out.append("Mean volume per contraction: " + " -> ".join(f"{x:,.0f}" for x in vols) + (f"; final / T1 = {extra['volume_trend']:.2f}" if extra.get("volume_trend") is not None else "") + ".")
+    if extra.get("final_vs_avg50") is not None:
+        out.append(f"Final contraction volume = {extra['final_vs_avg50']:.2f} x the 50-session average before it (dry-up needs <= {cfg.final_volume_ratio}).")
     if dry_days is not None:
         out.append(f"Dry-up days in the final contraction (volume <= {cfg.volume_dry_up_ratio} x prior 50-day average): {dry_days}. A single quiet day is never sufficient on its own.")
     out.append(f"Pivot {pivot:.2f} = high of the final contraction (base's first high {H0:.2f}).")
     if brk:
         out.append(f"Close {brk['close']} above the pivot on {brk['time'][:10]} with volume {brk['volume_ratio']}x the prior 50-day average ({'meets' if brk['volume_ok'] else 'below'} the {cfg.breakout_volume_ratio}x requirement).")
+    if flags.get("confirmation") == "pending":
+        out.append("Two-close confirmation mode: awaiting the second close above the pivot.")
     for g in gates:
         out.append(f"{'PASS' if g['passed'] else 'FAIL' if g['passed'] is False else 'N/A '} {g['name'].replace('_', ' ')}: {g['value']} (rule: {g['rule']}; {g['basis'].upper()})")
     return out

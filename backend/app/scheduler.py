@@ -99,6 +99,8 @@ class ScanScheduler:
             return True, "signal scanner configuration changed (breakouts / 52-week / Volume Shocker)"
         if timeframe == "1d" and last.get("vcp_config_hash") != self.s.vcp_config_hash:
             return True, "VCP configuration changed"
+        if timeframe == "1d" and last.get("ipo_config_hash") != self.s.ipo_config_hash:
+            return True, "IPO base configuration changed"
         started = parse_iso(last.get("started_at"))
         if started is None or started < latest_end + settle:
             return True, f"new completed {timeframe} candle (ended {latest_end.isoformat()})"
@@ -131,6 +133,8 @@ class ScanScheduler:
     def refresh_universe(self) -> None:
         self.s.universe.refresh_nifty500()
         self.s.universe.refresh_fno()
+        # official listing dates (IPO base scanner); a failure keeps the stored dates
+        self.s.universe.refresh_listing_dates()
         if self.s.universe.refresh_holidays().get("status") == "ok":
             self.s.reload_calendar()
         # Official NSE 52-week high/low report of the last completed session (optional

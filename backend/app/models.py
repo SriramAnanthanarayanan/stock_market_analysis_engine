@@ -220,6 +220,7 @@ class Candle(BaseModel):
     l: float
     c: float
     v: float | None
+    is_complete: bool = True  # chart candles are completed candles; the running period is ``partial_candle``
 
 
 class FutureBar(BaseModel):
@@ -280,7 +281,7 @@ class DataSourceInfo(BaseModel):
 
 
 class PartialCandle(BaseModel):
-    """The running multi-month period (completed daily candles so far); display only."""
+    """The running 1W / 1-12 month period (completed daily candles so far); display only."""
 
     t: int
     o: float
@@ -288,9 +289,14 @@ class PartialCandle(BaseModel):
     l: float
     c: float
     v: float | None
+    is_complete: bool = False
+    label: str = "INCOMPLETE"
+    timeframe: str | None = None
     sessions: int
+    first_session: str | None = None
     last_session: str | None
     period_end: str | None
+    note: str | None = None
 
 
 class ChartResponse(BaseModel):

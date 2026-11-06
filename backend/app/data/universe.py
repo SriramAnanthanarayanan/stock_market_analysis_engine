@@ -74,6 +74,30 @@ def nse_get(url: str, timeout: float = 30.0, attempts: int = 3) -> requests.Resp
 
 
 # ------------------------------------------------------------------ parsing
+def parse_equity_list(text: str, min_rows: int = 500) -> dict[str, date]:
+    """NSE equity list (EQUITY_L.csv): SYMBOL -> DATE OF LISTING (dd-MMM-yyyy).
+    Column names carry stray spaces in the official file; they are stripped."""
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    if reader.fieldnames is None:
+        raise UniverseError("equity list: empty file")
+    reader.fieldnames = [f.strip().upper() for f in reader.fieldnames]
+    if "SYMBOL" not in reader.fieldnames or "DATE OF LISTING" not in reader.fieldnames:
+        raise UniverseError(f"equity list: unexpected columns {reader.fieldnames}")
+    out: dict[str, date] = {}
+    for row in reader:
+        sym = (row.get("SYMBOL") or "").strip().upper()
+        raw = (row.get("DATE OF LISTING") or "").strip()
+        if not sym or not raw:
+            continue
+        try:
+            out[sym] = pd.to_datetime(raw, format="%d-%b-%Y").date()
+        except (ValueError, TypeError):
+            continue
+    if len(out) < min_rows:
+        raise UniverseError(f"equity list: only {len(out)} rows with a listing date (expected >= {min_rows})")
+    return out
+
+
 
 
 def parse_nifty500_csv(text: str, min_rows: int = 400, max_rows: int = 600) -> pd.DataFrame:
@@ -317,6 +341,40 @@ class UniverseService:
                 ],
             )
 
+    def refresh_listing_dates(self, text: str | None = None, source: str | None = None, min_rows: int = 500) -> dict[str, Any]:
+        """Official first trading (listing) dates of the universe's stocks from NSE's
+        equity list; used by the IPO base scanner. Failures keep the stored dates."""
+        source = source or self.settings.equity_list_url
+        log_id = self._log_start("listing_dates", source)
+        try:
+            if text is None:
+                if not self.settings.network_enabled:
+                    raise UniverseError("network disabled (PAS_NETWORK=0)")
+                text = nse_get(self.settings.equity_list_url).text
+            dates = parse_equity_list(text, min_rows)
+            stamp = db.now_ist_iso()
+            n = 0
+            with self.engine.begin() as conn:
+                for sym in [r[0] for r in conn.execute(select(db.stocks.c.symbol))]:
+                    d = dates.get(sym)
+                    if d is None:
+                        continue
+                    conn.execute(update(db.stocks).where(db.stocks.c.symbol == sym).values(listing_date=d.isoformat(), listing_date_source="nse_equity_list", updated_at=stamp))
+                    n += 1
+            self._log_end(log_id, "ok", rows=n)
+            return {"status": "ok", "rows": n, "listed": len(dates)}
+        except Exception as exc:
+            log.error("listing-date refresh failed: %s", exc)
+            self._log_end(log_id, "error", error=str(exc))
+            return {"status": "error", "error": str(exc)}
+
+    def listing_date(self, symbol: str) -> tuple[date | None, str | None]:
+        with self.engine.connect() as conn:
+            row = conn.execute(select(db.stocks.c.listing_date, db.stocks.c.listing_date_source).where(db.stocks.c.symbol == symbol)).first()
+        if row is None or not row[0]:
+            return None, None
+        return date.fromisoformat(row[0]), row[1]
+
     def refresh_holidays(self, payload: dict | None = None) -> dict[str, Any]:
         log_id = self._log_start("holidays", self.settings.holidays_url)
         try:
@@ -347,6 +405,9 @@ class UniverseService:
             result["fno"] = "present"
         else:
             result["fno"] = self.refresh_fno()
+        with self.engine.connect() as conn:
+            have_dates = conn.execute(select(func.count()).select_from(db.stocks).where(db.stocks.c.listing_date.is_not(None))).scalar()
+        result["listing_dates"] = "present" if have_dates else self.refresh_listing_dates()
         return result
 
     # ------------------------------------------------------------ queries

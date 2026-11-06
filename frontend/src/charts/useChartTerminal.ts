@@ -2,15 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Candle, IndicatorPayload, RSLinePayload, StageDetail, TechnicalPayload } from "../api/types";
 import type { OverlayShape } from "./OverlayPrimitive";
-import { vcpApi, type VcpSymbol } from "../api/advanced";
-import { vcpMarkers, vcpShapes } from "./vcpOverlay";
+import { ipoApi, vcpApi, type IpoRow, type VcpSymbol } from "../api/advanced";
+import { ipoMarkers, ipoShapes, ipoVolume, vcpMarkers, vcpShapes, vcpVolume } from "./vcpOverlay";
 import { loadLayout, loadPrefs, newId, saveLayout, savePrefs, type ChartPrefs } from "../lib/prefs";
 import { drawingsApi } from "../api/advanced";
 import { useDrawingStore } from "../lib/drawingStore";
 import { defaultFibSettings } from "./fib";
 import { isFib, type Anchor, type Drawing, type DrawingType } from "./drawings";
 import { isScanTimeframe, type ChartTimeframe } from "../lib/timeframes";
-import type { ChartHandle, ExtraPane, OverlayLine } from "./PatternChart";
+import type { ChartHandle, ChartMarker, ExtraPane, OverlayLine, VolumeHighlight } from "./PatternChart";
 import type { DrawStyle, DrawTool } from "./useDrawingTools";
 
 interface Source {
@@ -48,6 +48,7 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
         showRsLine: p.showRsLine || s.has("rs"),
         showStage: p.showStage || s.has("stage"),
         showVcp: p.showVcp || s.has("vcp"),
+        showIpo: p.showIpo || s.has("ipo"),
         emas: s.has("ema") ? p.emas.map((e) => ({ ...e, visible: e.visible || [20, 50, 200].includes(e.period) })) : p.emas,
       };
       return next;
@@ -77,8 +78,9 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
       settings: isFib(type) ? defaultFibSettings(type as "fib_retracement" | "fib_extension") : null,
       visible: true,
       timeframes: null,
+      created_timeframe: src?.timeframe ?? null,
     }),
-    [instr, src?.symbol],
+    [instr, src?.symbol, src?.timeframe],
   );
   void chartId;
 
@@ -91,14 +93,15 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     if (!src || startT === undefined) return;
     let cancelled = false;
     const q = { symbol: src.symbol, timeframe: src.timeframe, asof: src.asof, scan_id: src.scanId, start_t: startT, instrument: src.instrument ?? "stock" };
+    const withPartial = !!prefs.indicatorsIncludePartial && !["1h", "4h", "1d"].includes(src.timeframe);
     api
-      .indicators({ ...q, ema: periods, rsi_period: prefs.rsiPeriod, atr_period: prefs.atrPeriod })
+      .indicators({ ...q, ema: periods, rsi_period: prefs.rsiPeriod, atr_period: prefs.atrPeriod, include_partial: withPartial || null })
       .then((r) => !cancelled && (setIndicators(r), setTechError(null)))
       .catch((e) => !cancelled && (setIndicators(null), setTechError(e instanceof Error ? e.message : String(e))));
     return () => {
       cancelled = true;
     };
-  }, [src?.symbol, src?.timeframe, src?.asof, src?.scanId, src?.instrument, startT, periods, prefs.rsiPeriod, prefs.atrPeriod]);
+  }, [src?.symbol, src?.timeframe, src?.asof, src?.scanId, src?.instrument, startT, periods, prefs.rsiPeriod, prefs.atrPeriod, prefs.indicatorsIncludePartial]);
   useEffect(() => {
     if (!src || startT === undefined) return;
     let cancelled = false;
@@ -185,9 +188,31 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
   }, [src?.symbol, src?.timeframe, src?.asof, instrument, prefs.showVcp]);
   const vcpOverlay = useMemo(() => {
     const g = vcp?.vcp?.geometry;
-    if (!g || !prefs.showVcp) return { shapes: [] as OverlayShape[], markers: [] };
-    return { shapes: vcpShapes(g, vcp?.vcp?.last_close), markers: vcpMarkers(g) };
+    if (!g || !prefs.showVcp || !g.schema_version?.startsWith("vcp-2")) return { shapes: [] as OverlayShape[], markers: [] as ChartMarker[], volume: [] as VolumeHighlight[] };
+    return { shapes: vcpShapes(g, vcp?.vcp?.last_close), markers: vcpMarkers(g), volume: vcpVolume(g) };
   }, [vcp, prefs.showVcp]);
+
+  // ---- IPO base geometry of the latest daily scan (daily charts only)
+  const [ipo, setIpo] = useState<IpoRow | null>(null);
+  useEffect(() => {
+    if (!src || instrument !== "stock" || !prefs.showIpo || src.timeframe !== "1d") {
+      setIpo(null);
+      return;
+    }
+    let cancelled = false;
+    ipoApi
+      .symbol(src.symbol, src.asof)
+      .then((r) => !cancelled && setIpo(r.ipo))
+      .catch(() => !cancelled && setIpo(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [src?.symbol, src?.timeframe, src?.asof, instrument, prefs.showIpo]);
+  const ipoOverlay = useMemo(() => {
+    const g = ipo?.geometry;
+    if (!g || !prefs.showIpo) return { shapes: [] as OverlayShape[], markers: [] as ChartMarker[], volume: [] as VolumeHighlight[] };
+    return { shapes: ipoShapes(g), markers: ipoMarkers(g), volume: ipoVolume(g) };
+  }, [ipo, prefs.showIpo]);
 
   const handle = useRef<ChartHandle | null>(null);
   const onReady = useCallback((h: ChartHandle | null) => {
@@ -226,7 +251,7 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     },
     onExportDrawings: () => {
       // Every drawing of every symbol (database backup), downloaded by the browser.
-      void store.saveNow().finally(() => download("chart-drawings.json", drawingsApi.exportUrl));
+      void store.saveNow().finally(() => download("chart-drawings.json", drawingsApi.exportUrl()));
     },
     onImportDrawings: (file: File) => {
       file
@@ -260,6 +285,8 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     stage,
     vcp,
     vcpOverlay,
+    ipo,
+    ipoOverlay,
     extraPanes,
     stageOverlay,
     onReady,

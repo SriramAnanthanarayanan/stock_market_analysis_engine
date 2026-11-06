@@ -1,8 +1,10 @@
 """Database-backed manual chart drawings (docs/chart-drawing-persistence.md).
 
-A drawing belongs to an instrument (stock or index) and symbol - not to one
-chart page or timeframe - and is anchored to (candle start time in epoch
-seconds, price), never to pixels. ``timeframes`` limits where it is shown
+A drawing belongs to a user (``owner``; the single local user is ``local``), an
+instrument (stock or index) and symbol, and records the timeframe it was drawn
+on (``created_timeframe``). It is anchored to (candle start time in epoch
+seconds, price), never to pixels, so it stays aligned on every timeframe, zoom
+level and chart type (candles or line). ``timeframes`` limits where it is shown
 (``None`` = every timeframe).
 
 Concurrency: every row carries ``version``. An update or delete must name the
@@ -23,8 +25,20 @@ from sqlalchemy import Engine, delete, select
 from . import database as db
 from .config import CHART_TIMEFRAMES
 
-DRAWING_TYPES = ("hline", "vline", "trend", "ray", "rect", "channel", "fib_retracement", "fib_extension")
-ANCHORS = {"hline": 1, "vline": 1, "trend": 2, "ray": 2, "rect": 2, "channel": 3, "fib_retracement": 2, "fib_extension": 3}
+DRAWING_TYPES = ("hline", "vline", "trend", "ray", "rect", "channel", "fib_retracement", "fib_extension", "text")
+ANCHORS = {"hline": 1, "vline": 1, "trend": 2, "ray": 2, "rect": 2, "channel": 3, "fib_retracement": 2, "fib_extension": 3, "text": 1}
+USER_RE = re.compile(r"^[A-Za-z0-9_.@\-]{1,64}$")
+DEFAULT_USER = "local"
+
+
+def norm_user(user: str | None) -> str:
+    """The drawing owner: an explicit user id (header X-PAS-User) or the single local user."""
+    u = (user or "").strip()
+    if not u:
+        return DEFAULT_USER
+    if not USER_RE.match(u):
+        raise ValueError("user id: 1-64 of A-Z a-z 0-9 _ . @ -")
+    return u
 ID_RE = r"^[A-Za-z0-9_\-]{6,64}$"
 COLOR_RE = re.compile(r"^(#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*(0|1|0?\.\d+)\s*)?\))$")
 
@@ -48,7 +62,7 @@ class DrawingIn(BaseModel):
     drawing_id: str = Field(pattern=ID_RE)
     instrument: Literal["stock", "index"] = "stock"
     symbol: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9&\-_.^ :/]+$")
-    drawing_type: Literal["hline", "vline", "trend", "ray", "rect", "channel", "fib_retracement", "fib_extension"]
+    drawing_type: Literal["hline", "vline", "trend", "ray", "rect", "channel", "fib_retracement", "fib_extension", "text"]
     anchors: list[Anchor] = Field(min_length=1, max_length=3)
     color: str = Field(default="#19C3DA", max_length=40)
     line_style: Literal["solid", "dashed", "dotted"] = "solid"
@@ -57,6 +71,15 @@ class DrawingIn(BaseModel):
     settings: dict[str, Any] | None = None
     visible: bool = True
     timeframes: list[str] | None = None
+    created_timeframe: str | None = None
+    owner: str | None = Field(default=None, max_length=64, description="ignored: the owner is the request's user (X-PAS-User)")
+
+    @field_validator("created_timeframe")
+    @classmethod
+    def _ctf(cls, v: str | None) -> str | None:
+        if v is not None and v not in CHART_TIMEFRAMES:
+            raise ValueError(f"created_timeframe must be one of {list(CHART_TIMEFRAMES)}")
+        return v
 
     @field_validator("color")
     @classmethod
@@ -91,6 +114,11 @@ class DrawingIn(BaseModel):
             self.settings = validate_fib_settings(self.settings or {}, self.anchors)
         elif self.settings and len(repr(self.settings)) > 4000:
             raise ValueError("settings too large")
+        if self.drawing_type == "text":
+            label = str((self.style or {}).get("label") or "").strip()
+            if len(label) > 300:
+                raise ValueError("annotation text: at most 300 characters")
+            self.style = {**(self.style or {}), "label": label or "Note"}
         return self
 
 
@@ -128,6 +156,7 @@ def norm_symbol(instrument: str, symbol: str) -> str:
 
 def row_out(r: Any) -> dict[str, Any]:
     d = dict(r)
+    d.setdefault("owner", DEFAULT_USER)
     d["anchors"] = db.loads(d.pop("anchors_json")) or []
     d["style"] = db.loads(d.pop("style_json", None)) or {}
     d["settings"] = db.loads(d.pop("settings_json", None))
@@ -149,6 +178,7 @@ def _values(d: DrawingIn) -> dict[str, Any]:
         "settings_json": db.dumps(d.settings) if d.settings is not None else None,
         "visible": int(d.visible),
         "timeframes_json": db.dumps(d.timeframes) if d.timeframes is not None else None,
+        "created_timeframe": d.created_timeframe,
     }
 
 
@@ -157,17 +187,20 @@ class Conflict(Exception):
         self.current = current
 
 
-def get(engine: Engine, drawing_id: str) -> dict[str, Any] | None:
+def get(engine: Engine, drawing_id: str, owner: str | None = None) -> dict[str, Any] | None:
     t = db.chart_drawings
+    q = select(t).where(t.c.drawing_id == drawing_id)
+    if owner is not None:
+        q = q.where(t.c.owner == owner)
     with engine.connect() as conn:
-        r = conn.execute(select(t).where(t.c.drawing_id == drawing_id)).mappings().first()
+        r = conn.execute(q).mappings().first()
     return row_out(r) if r else None
 
 
-def list_for(engine: Engine, instrument: str, symbol: str, timeframe: str | None = None) -> list[dict[str, Any]]:
+def list_for(engine: Engine, instrument: str, symbol: str, timeframe: str | None = None, owner: str = DEFAULT_USER) -> list[dict[str, Any]]:
     t = db.chart_drawings
     with engine.connect() as conn:
-        rows = conn.execute(select(t).where((t.c.instrument == instrument) & (t.c.symbol == norm_symbol(instrument, symbol))).order_by(t.c.created_at)).mappings().all()
+        rows = conn.execute(select(t).where((t.c.owner == owner) & (t.c.instrument == instrument) & (t.c.symbol == norm_symbol(instrument, symbol))).order_by(t.c.created_at)).mappings().all()
     out = [row_out(r) for r in rows]
     if timeframe:
         out = [d for d in out if d["timeframes"] is None or timeframe in d["timeframes"]]
@@ -178,38 +211,41 @@ def _history(conn, drawing_id: str, version: int, action: str, payload: dict[str
     conn.execute(db.chart_drawing_history.insert().values(drawing_id=drawing_id, version=version, action=action, payload_json=db.dumps(payload), at=db.now_ist_iso()))
 
 
-def create(engine: Engine, d: DrawingIn, origin: str = "ui") -> dict[str, Any]:
+def create(engine: Engine, d: DrawingIn, origin: str = "ui", owner: str = DEFAULT_USER) -> dict[str, Any]:
     t = db.chart_drawings
     now = db.now_ist_iso()
     with engine.begin() as conn:
         exists = conn.execute(select(t.c.drawing_id).where(t.c.drawing_id == d.drawing_id)).first()
         if exists:
             raise Conflict(None)
-        vals = {**_values(d), "drawing_id": d.drawing_id, "created_at": now, "updated_at": now, "version": 1, "origin": origin}
+        vals = {**_values(d), "drawing_id": d.drawing_id, "created_at": now, "updated_at": now, "version": 1, "origin": origin, "owner": owner}
         conn.execute(t.insert().values(**vals))
-        _history(conn, d.drawing_id, 1, "create", d.model_dump())
+        _history(conn, d.drawing_id, 1, "create", {**d.model_dump(), "owner": owner})
     return get(engine, d.drawing_id)  # type: ignore[return-value]
 
 
-def update(engine: Engine, drawing_id: str, d: DrawingUpdate) -> dict[str, Any]:
+def update(engine: Engine, drawing_id: str, d: DrawingUpdate, owner: str | None = None) -> dict[str, Any]:
     t = db.chart_drawings
     with engine.begin() as conn:
         cur = conn.execute(select(t).where(t.c.drawing_id == drawing_id)).mappings().first()
-        if cur is None:
+        if cur is None or (owner is not None and cur["owner"] != owner):
             raise KeyError(drawing_id)
         if cur["version"] != d.base_version:
             raise Conflict(row_out(cur))
         v = cur["version"] + 1
-        conn.execute(t.update().where((t.c.drawing_id == drawing_id) & (t.c.version == d.base_version)).values(**_values(d), updated_at=db.now_ist_iso(), version=v))
+        vals = _values(d)
+        if vals.get("created_timeframe") is None:
+            vals.pop("created_timeframe")  # keep the timeframe it was drawn on
+        conn.execute(t.update().where((t.c.drawing_id == drawing_id) & (t.c.version == d.base_version)).values(**vals, updated_at=db.now_ist_iso(), version=v))
         _history(conn, drawing_id, v, "update", d.model_dump(exclude={"base_version"}))
     return get(engine, drawing_id)  # type: ignore[return-value]
 
 
-def remove(engine: Engine, drawing_id: str, version: int) -> None:
+def remove(engine: Engine, drawing_id: str, version: int, owner: str | None = None) -> None:
     t = db.chart_drawings
     with engine.begin() as conn:
         cur = conn.execute(select(t).where(t.c.drawing_id == drawing_id)).mappings().first()
-        if cur is None:
+        if cur is None or (owner is not None and cur["owner"] != owner):
             raise KeyError(drawing_id)
         if cur["version"] != version:
             raise Conflict(row_out(cur))
@@ -224,10 +260,13 @@ def history(engine: Engine, drawing_id: str) -> list[dict[str, Any]]:
     return [{"version": r["version"], "action": r["action"], "at": r["at"], "payload": db.loads(r["payload_json"])} for r in rows]
 
 
-def export_all(engine: Engine) -> dict[str, Any]:
+def export_all(engine: Engine, owner: str | None = None) -> dict[str, Any]:
     t, tt = db.chart_drawings, db.drawing_templates
+    q = select(t)
+    if owner is not None:
+        q = q.where(t.c.owner == owner)
     with engine.connect() as conn:
-        rows = [row_out(r) for r in conn.execute(select(t).order_by(t.c.instrument, t.c.symbol, t.c.created_at)).mappings()]
+        rows = [row_out(r) for r in conn.execute(q.order_by(t.c.instrument, t.c.symbol, t.c.created_at)).mappings()]
         tpl = [template_out(r) for r in conn.execute(select(tt).order_by(tt.c.name)).mappings()]
     return {"format": "pas-drawings-v2", "exported_at": db.now_ist_iso(), "count": len(rows), "drawings": rows, "templates": tpl}
 
@@ -258,13 +297,14 @@ def _legacy_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
                     "line_style": "dashed" if d.get("dashed") else "solid",
                     "line_width": int(d.get("width", 2)),
                     "timeframes": [tf] if tf in CHART_TIMEFRAMES else None,
+                    "created_timeframe": tf if tf in CHART_TIMEFRAMES else None,
                     "settings": {"levels": [{"ratio": r} for r in (0, 0.236, 0.382, 0.5, 0.618, 0.786, 1)]} if typ == "fib_retracement" else None,
                 }
             )
     return out
 
 
-def import_payload(engine: Engine, payload: dict[str, Any]) -> dict[str, Any]:
+def import_payload(engine: Engine, payload: dict[str, Any], owner: str = DEFAULT_USER) -> dict[str, Any]:
     """Restore a backup. Unknown drawings are inserted; a drawing that exists is
     replaced only when the backup copy is newer (higher version, or the same
     version updated later); otherwise it is skipped. Invalid entries are reported."""
@@ -282,11 +322,14 @@ def import_payload(engine: Engine, payload: dict[str, Any]) -> dict[str, Any]:
             continue
         cur = get(engine, d.drawing_id)
         if cur is None:
-            create(engine, d, origin="legacy_browser" if fmt == "pas-drawings-v1" else "import")
+            create(engine, d, origin="legacy_browser" if fmt == "pas-drawings-v1" else "import", owner=owner)
             if raw.get("version") or raw.get("created_at"):
                 with engine.begin() as conn:
                     conn.execute(t.update().where(t.c.drawing_id == d.drawing_id).values(version=int(raw.get("version") or 1), created_at=raw.get("created_at") or db.now_ist_iso(), updated_at=raw.get("updated_at") or db.now_ist_iso()))
             res["inserted"] += 1
+            continue
+        if cur.get("owner", DEFAULT_USER) != owner:
+            res["skipped"] += 1  # another user's drawing is never touched
             continue
         newer = int(raw.get("version") or 0) > cur["version"] or (int(raw.get("version") or 0) == cur["version"] and str(raw.get("updated_at") or "") > str(cur["updated_at"]))
         if not newer:
@@ -307,7 +350,7 @@ class TemplateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     template_id: str = Field(pattern=ID_RE)
     name: str = Field(min_length=1, max_length=80)
-    drawing_type: Literal["hline", "vline", "trend", "ray", "rect", "channel", "fib_retracement", "fib_extension"]
+    drawing_type: Literal["hline", "vline", "trend", "ray", "rect", "channel", "fib_retracement", "fib_extension", "text"]
     scope: Literal["global", "symbol"] = "global"
     symbol: str | None = Field(default=None, max_length=80)
     settings: dict[str, Any]

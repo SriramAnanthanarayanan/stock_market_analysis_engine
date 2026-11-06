@@ -19,8 +19,8 @@ import { LEVEL_COLORS, defaultFibSettings, fibLevels, ratioText, type FibSetting
 // panning, resizing, switching panes or timeframes. Persistence:
 // lib/drawingStore.ts (database, docs/chart-drawing-persistence.md).
 
-export type DrawingType = "hline" | "vline" | "trend" | "ray" | "rect" | "channel" | "fib_retracement" | "fib_extension";
-export const ANCHOR_COUNT: Record<DrawingType, number> = { hline: 1, vline: 1, trend: 2, ray: 2, rect: 2, channel: 3, fib_retracement: 2, fib_extension: 3 };
+export type DrawingType = "hline" | "vline" | "trend" | "ray" | "rect" | "channel" | "fib_retracement" | "fib_extension" | "text";
+export const ANCHOR_COUNT: Record<DrawingType, number> = { hline: 1, vline: 1, trend: 2, ray: 2, rect: 2, channel: 3, fib_retracement: 2, fib_extension: 3, text: 1 };
 export const DRAWING_LABELS: Record<DrawingType, string> = {
   hline: "Horizontal line",
   vline: "Vertical line",
@@ -30,6 +30,7 @@ export const DRAWING_LABELS: Record<DrawingType, string> = {
   channel: "Parallel channel",
   fib_retracement: "Fib retracement",
   fib_extension: "Trend-based Fib extension",
+  text: "Annotation (text)",
 };
 
 export interface Anchor {
@@ -58,6 +59,8 @@ export interface Drawing {
   settings: FibSettings | null;
   visible: boolean;
   timeframes: string[] | null; // null = every timeframe
+  created_timeframe?: string | null; // timeframe the drawing was made on (stored; display is by `timeframes`)
+  owner?: string;
   version?: number;
   created_at?: string;
   updated_at?: string;
@@ -203,7 +206,11 @@ export function hitTest(drawings: Drawing[], m: PixelMapper, p: Pt, selectedId: 
     const P = ps as Pt[];
     let dist = Infinity;
     const t = d.drawing_type;
-    if (t === "hline") dist = Math.abs(p.y - P[0].y);
+    if (t === "text") {
+      const w = Math.max(40, 7 * (d.style?.label ?? "Note").length);
+      const inside = p.x >= P[0].x - 4 && p.x <= P[0].x + w && p.y >= P[0].y - 16 && p.y <= P[0].y + 4;
+      dist = inside ? 0 : Math.hypot(p.x - P[0].x, p.y - P[0].y);
+    } else if (t === "hline") dist = Math.abs(p.y - P[0].y);
     else if (t === "vline") dist = Math.abs(p.x - P[0].x);
     else if (t === "trend") {
       const [a, b] = extendSegment(P[0], P[1], m.width, !!d.style?.extend_left, !!d.style?.extend_right);
@@ -319,7 +326,23 @@ class DrawRenderer implements IPrimitivePaneRenderer {
         ctx.setLineDash(dash(d.line_style));
         ctx.beginPath();
         const t = d.drawing_type;
-        if (t === "hline") {
+        if (t === "text") {
+          const label = d.style?.label || "Note";
+          ctx.font = "12px Inter, Segoe UI, sans-serif";
+          const w = ctx.measureText(label).width + 10;
+          ctx.globalAlpha = (d.style?.opacity ?? 1) * 0.85;
+          ctx.fillStyle = "#052232";
+          ctx.fillRect(P[0].x - 2, P[0].y - 15, w, 18);
+          ctx.globalAlpha = d.style?.opacity ?? 1;
+          ctx.strokeStyle = d.color;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(P[0].x - 2, P[0].y - 15, w, 18);
+          ctx.fillStyle = d.color;
+          ctx.fillText(label, P[0].x + 3, P[0].y - 2);
+          ctx.beginPath();
+          ctx.arc(P[0].x - 2, P[0].y + 3, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (t === "hline") {
           ctx.moveTo(0, P[0].y);
           ctx.lineTo(W, P[0].y);
           ctx.stroke();

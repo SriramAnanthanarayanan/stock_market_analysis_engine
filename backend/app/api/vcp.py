@@ -27,7 +27,7 @@ from .signals import scan_summary, universe_clause
 
 router = APIRouter(prefix="/api")
 
-DEFAULT_STATUSES = ("near_pivot", "tightening", "breakout", "breakout_pending", "pivot_cross_low_volume", "forming", "failed_breakout")
+DEFAULT_STATUSES = ("near_pivot", "final_contraction", "breakout", "forming", "failed_breakout")
 STAGE_FILTERS = Literal["all", "stage2", "stage2_or_stage1", "exclude_other"]
 
 
@@ -49,6 +49,9 @@ def vcp_row(r: Any) -> dict[str, Any]:
     d["in_nifty500"] = bool(d.get("in_nifty500"))
     d["qualified"] = bool(d.get("qualified"))
     d["depths_pct"] = d.pop("depths", None) or []
+    m = d.get("metrics") or {}
+    d["pivot_crossed_low_volume"] = bool(m.get("pivot_crossed_low_volume"))
+    d["breakout_confirmation"] = m.get("breakout_confirmation")
     return d
 
 
@@ -126,7 +129,7 @@ def scan_vcp(
             continue
         r.pop("geometry", None)  # chart payload: /api/vcp/symbol
         items.append(r)
-    rank = {k: i for i, k in enumerate(("breakout", "breakout_pending", "near_pivot", "tightening", "pivot_cross_low_volume", "forming", "failed_breakout", "developing", "invalidated"))}
+    rank = {k: i for i, k in enumerate(("breakout", "near_pivot", "final_contraction", "forming", "failed_breakout", "developing", "invalidated"))}
     items.sort(key=lambda r: (rank.get(r["status"], 99), -r["quality"]))
     return {
         "scan": scan_summary(scan),
@@ -136,7 +139,8 @@ def scan_vcp(
         "status_labels": STATUS_LABELS,
         "note": (
             "VCP on completed daily candles: successive contractions T1 > T2 > ... (each <= "
-            f"{s.vcp_cfg.contraction_ratio_max} x the previous), volume drying up, a tight final contraction and its pivot. "
+            f"{s.vcp_cfg.max_next_contraction_ratio} x the previous, >= {s.vcp_cfg.min_contraction_pct} %), volume drying up (final <= {s.vcp_cfg.final_volume_ratio} x the 50-day average), "
+            f"a tight final contraction (<= {s.vcp_cfg.max_final_contraction_pct} %) and its pivot; breakout = close above the pivot on >= {s.vcp_cfg.breakout_volume_ratio} x volume. "
             "Quality is an explainable fit score, not a probability. Stage = your Stage Analysis of the latest weekly scan (context only). "
             "Synthetic tests only - real-chart accuracy is not validated."
         ),
@@ -179,4 +183,5 @@ def _contractions(s: Services, scan_id: str, vcp_id: str) -> list[dict[str, Any]
     t = db.vcp_contractions
     with s.engine.connect() as conn:
         rows = conn.execute(select(t).where((t.c.scan_id == scan_id) & (t.c.vcp_id == vcp_id)).order_by(t.c.seq)).mappings().all()
-    return [{**dict(r), "provisional": bool(r["provisional"]), "label": f"T{r['seq']}"} for r in rows]
+    last = max((r["seq"] for r in rows), default=0)
+    return [{**dict(r), "provisional": bool(r["provisional"]), "final": bool(r["final"]) if r.get("final") is not None else r["seq"] == last, "label": f"T{r['seq']}"} for r in rows]

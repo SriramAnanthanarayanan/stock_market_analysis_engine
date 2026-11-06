@@ -66,6 +66,8 @@ stocks = Table(
     Column("isin", String),
     Column("series", String),
     Column("in_nifty500", Integer, nullable=False, default=0),
+    Column("listing_date", String),  # first trading / listing date (migration 9)
+    Column("listing_date_source", String),  # nse_equity_list | ...
     Column("first_seen", String),
     Column("last_seen", String),
     Column("updated_at", String),
@@ -161,6 +163,8 @@ scans = Table(
     Column("signal_config_hash", String),
     Column("vcp_config_version", String),  # VCP detector (daily scans, migration 8)
     Column("vcp_config_hash", String),
+    Column("ipo_config_version", String),  # IPO base detector (daily scans, migration 9)
+    Column("ipo_config_hash", String),
 )
 Index("ix_scans_lookup", scans.c.timeframe, scans.c.universe, scans.c.asof, scans.c.state)
 
@@ -596,6 +600,11 @@ vcp_contractions = Table(
     Column("min_volume", Float),
     Column("volume_vs_avg50", Float),
     Column("provisional", Integer, nullable=False),
+    Column("median_volume", Float),  # migration 9 (VCP v2 per-contraction metrics)
+    Column("volume_vs_prev", Float),
+    Column("atr_range", Float),
+    Column("recovery_bars", Integer),
+    Column("final", Integer),
     PrimaryKeyConstraint("scan_id", "vcp_id", "seq"),
 )
 
@@ -660,8 +669,11 @@ chart_drawings = Table(
     Column("updated_at", String, nullable=False),
     Column("version", Integer, nullable=False),
     Column("origin", String),  # ui | import | legacy_browser
+    Column("owner", String, nullable=False, server_default="local"),  # user (migration 9)
+    Column("created_timeframe", String),  # timeframe the drawing was made on (migration 9)
 )
 Index("ix_chart_drawings_symbol", chart_drawings.c.instrument, chart_drawings.c.symbol)
+Index("ix_chart_drawings_owner", chart_drawings.c.owner, chart_drawings.c.instrument, chart_drawings.c.symbol)
 
 chart_drawing_history = Table(
     "chart_drawing_history",
@@ -803,6 +815,21 @@ def _migration_8(conn: Connection) -> None:
         _add_column(conn, "scans", col)
 
 
+def _migration_9(conn: Connection) -> None:
+    """Improvement task: IPO base scanner config on scans, official listing dates,
+    drawings by user and creating timeframe. Existing drawings belong to the
+    single local user ('local'); nothing is rewritten or dropped."""
+    for col in ("ipo_config_version", "ipo_config_hash"):
+        _add_column(conn, "scans", col)
+    for col in ("listing_date", "listing_date_source"):
+        _add_column(conn, "stocks", col)
+    _add_column(conn, "chart_drawings", "owner", "VARCHAR NOT NULL DEFAULT 'local'")
+    _add_column(conn, "chart_drawings", "created_timeframe")
+    for col, ddl in (("median_volume", "FLOAT"), ("volume_vs_prev", "FLOAT"), ("atr_range", "FLOAT"), ("recovery_bars", "INTEGER"), ("final", "INTEGER")):
+        _add_column(conn, "vcp_contractions", col, ddl)
+    conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_chart_drawings_owner ON chart_drawings (owner, instrument, symbol)")
+
+
 # Append-only. Never edit a released migration; add a new one instead.
 MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (1, "initial schema: universe, market data metadata, scans, detections, geometry, lifecycle", _migration_1),
@@ -813,6 +840,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (6, "Stage Analysis results; scans.stage_config_version/hash (E3)", _migration_6),
     (7, "market_data.history_period: history depth of each cache (full-history backfill)", _migration_7),
     (8, "signal evidence, VCP, confluence snapshots, chart drawings, NSE 52-week reference; scans signal/VCP config", _migration_8),
+    (9, "IPO base config on scans, stock listing dates, drawings by user + creating timeframe, VCP v2 contraction metrics", _migration_9),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

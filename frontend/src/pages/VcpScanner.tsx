@@ -12,10 +12,10 @@ import { SymbolButton, useOpenChart } from "../lib/openChart";
 const PRESETS: { key: string; label: string; status: string }[] = [
   { key: "", label: "Active VCPs", status: "" },
   { key: "near", label: "Near Pivot", status: "near_pivot" },
-  { key: "tight", label: "Tightening", status: "tightening,near_pivot" },
-  { key: "bo", label: "Breakouts", status: "breakout,breakout_pending" },
+  { key: "tight", label: "Final Contraction", status: "final_contraction,near_pivot" },
+  { key: "bo", label: "Breakouts", status: "breakout" },
   { key: "forming", label: "Forming", status: "forming" },
-  { key: "failed", label: "Failed / invalidated", status: "failed_breakout,invalidated,pivot_cross_low_volume" },
+  { key: "failed", label: "Failed / invalidated", status: "failed_breakout,invalidated" },
 ];
 
 export function VcpScanner() {

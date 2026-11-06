@@ -23,7 +23,7 @@ from ..scanner import find_latest_scan
 from .engine import inputs_key, score_symbol, summarize
 
 log = logging.getLogger(__name__)
-CONTEXT_SOURCES = ("stage", "rs_line", "rrg")
+CONTEXT_SOURCES = ("stage", "rs_line", "rrg", "sector")
 # One computation at a time: the post-scan hook and a dashboard request that
 # arrives meanwhile must not both build a snapshot for the same inputs.
 _SNAPSHOT_LOCK = threading.Lock()
@@ -45,11 +45,13 @@ SCREENS: list[dict[str, Any]] = [
     {"key": "breakout_volume", "label": "Fresh Breakout + Volume Shock", "direction": "bullish", "description": "A fresh 10-day or 52-week breakout and a volume shock on the same completed session (combination window).", "test": lambda r: _combo(r) in ("breakout_volume", "breakout_marubozu_volume")},
     {"key": "breakout_marubozu_volume", "label": "Fresh Breakout + Bullish Marubozu + Volume Shock", "direction": "bullish", "description": "All three on the same completed session - the combination that earns the full bonus.", "test": lambda r: _combo(r) == "breakout_marubozu_volume"},
     {"key": "vcp_near_pivot", "label": "VCP + Near Pivot", "direction": "bullish", "description": "A qualified VCP whose close is within the near-pivot distance below the pivot.", "test": lambda r: r["summary"].get("vcp_status") == "near_pivot"},
-    {"key": "vcp_breakout", "label": "VCP Breakout + Volume Expansion", "direction": "bullish", "description": "A close above the VCP pivot on volume >= the breakout volume ratio.", "test": lambda r: r["summary"].get("vcp_status") in ("breakout", "breakout_pending")},
+    {"key": "vcp_breakout", "label": "VCP Breakout + Volume Expansion", "direction": "bullish", "description": "A close above the VCP pivot on volume >= the breakout volume ratio.", "test": lambda r: r["summary"].get("vcp_status") == "breakout"},
     {"key": "week52_rs", "label": "52-week High + Strong Relative Strength", "direction": "bullish", "description": "A fresh 52-week high breakout and a relative-strength category score >= 0.6.", "test": lambda r: bool(r["summary"].get("week52")) and _cat(r, "relative_strength") >= 0.6},
     {"key": "stage2_ema", "label": "Stage 2 + EMA Bullish Alignment", "direction": "bullish", "description": "Your Stage Analysis says Early Stage 2 or Stage 2 Confirmed and the EMAs are in bullish order (full or partial).", "test": lambda r: r["summary"].get("stage") in ("stage2_confirmed", "early_stage2") and (r["summary"].get("ema_alignment") or "").startswith("bullish")},
     {"key": "pattern_volume", "label": "Price Action Pattern + Volume Expansion", "direction": "bullish", "description": "An active bullish price-action pattern and a fresh volume shock or high breakout volume.", "test": lambda r: bool(r["summary"].get("pattern")) and _cat(r, "setup") >= 0.5 and next((c.get("parts", {}).get("volume", 0) for c in r["explanation"] if c["key"] == "volume_candle"), 0) > 0},
     {"key": "multiple_bullish", "label": "Multiple Independent Bullish Evidence", "direction": "bullish", "description": "At least three of the five categories score >= 0.5 and the stock is ranked (enough coverage).", "test": lambda r: r["ranked"] and sum(1 for c in r["explanation"] if c["available"] and c["score"] >= 0.5) >= 3},
+    {"key": "about_to_breakout", "label": "10D About to Break Out + Bullish Trend", "direction": "bullish", "description": "Close Approaching / Very Near / Touching the previous 10-day high (before the breakout) with a bullish EMA alignment.", "test": lambda r: r["summary"].get("setup_state") in ("approaching", "very_near", "touched") and (r["summary"].get("ema_alignment") or "").startswith("bullish")},
+    {"key": "ipo_base", "label": "IPO Base Near Pivot / Breakout", "direction": "bullish", "description": "A post-listing base near its pivot or breaking out above it on volume (IPO base scanner).", "test": lambda r: r["summary"].get("ipo_status") in ("near_pivot", "breakout")},
     {"key": "bearish_breakdown", "label": "Bearish Breakdown Confluence", "direction": "bearish", "description": "A fresh breakdown (10-day, 52-week or pattern) with volume / candle confirmation (bearish scoring).", "test": lambda r: _cat(r, "trigger") >= 0.5 and _cat(r, "volume_candle") >= 0.3},
 ]
 SCREEN_BY_KEY = {s["key"]: s for s in SCREENS}

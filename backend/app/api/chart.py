@@ -226,7 +226,8 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
     ps = prepare_series(raw, symbol, timeframe, cutoff, s.calendar)
     frame = ps.frame
     n = len(frame)
-    if n == 0 and not (multi and ps.partial is not None and len(ps.partial)):
+    running = running_candle(s, symbol, timeframe, cutoff, ps)
+    if n == 0 and running is None:
         raise HTTPException(status_code=404, detail=f"no completed {timeframe} candles for {symbol} at the cutoff")
     times = frame.index
     newer = len(prepare_series(raw, symbol, timeframe, asof_cutoff(asof), s.calendar).frame) > n
@@ -298,7 +299,7 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
 
     o, h, l, c, v = (frame[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close", "volume"))
     candles = [
-        {"t": epoch_s(times[i]), "i": i, "o": o[i], "h": h[i], "l": l[i], "c": c[i], "v": None if not np.isfinite(v[i]) else v[i]}
+        {"t": epoch_s(times[i]), "i": i, "o": o[i], "h": h[i], "l": l[i], "c": c[i], "v": None if not np.isfinite(v[i]) else v[i], "is_complete": True}
         for i in range(first, n)
     ]
     # Chart time scales are index based: every bar between the last candle and
@@ -350,23 +351,38 @@ def build_chart(s: Services, symbol: str, timeframe: str, pattern_id: str | None
         "newer_data_available": bool(newer),
         "notes": notes,
         "data_source": data_source(s, frame, scan),
-        "partial_candle": partial_candle(ps, s) if multi else None,
+        "partial_candle": running,
         "performance": _performance(s, symbol, timeframe, frame, cutoff),
         "detector_support": detector_support(timeframe),
         "candles_total": n,
     }
 
 
-def partial_candle(ps, s: Services) -> dict[str, Any] | None:
-    """The running multi-month period built from completed daily candles (display only)."""
+def running_frame(s: Services, symbol: str, timeframe: str, cutoff, ps=None):
+    """The current incomplete 1W / 1-12 month period of a stock (1-row frame) or None.
+    Built from the completed daily candles, so its close and time match the daily chart."""
     from ..config import MULTI_MONTH_MONTHS
-    from ..data.periods import period_bar_ends
+    from ..data.periods import partial_week
 
-    part = ps.partial
+    if timeframe in MULTI_MONTH_MONTHS:
+        part = ps.partial if ps is not None else None
+    elif timeframe == "1w":
+        raw = s.store.load_current(symbol, "1d")
+        if raw is None or raw.empty:
+            return None
+        part = partial_week(prepare_series(raw, symbol, "1d", cutoff, s.calendar).frame, cutoff, s.calendar)
+    else:
+        return None
     if part is None or part.empty:
         return None
-    r = part.iloc[-1]
-    ts = part.index[-1]
-    end = period_bar_ends(part.index[-1:], MULTI_MONTH_MONTHS[ps.timeframe], s.calendar)[0]
-    vol = float(r["volume"]) if np.isfinite(r["volume"]) else None
-    return {"t": epoch_s(ts), "o": float(r["open"]), "h": float(r["high"]), "l": float(r["low"]), "c": float(r["close"]), "v": vol, "sessions": int(r["source_bars"]), "last_session": r["last_session"].isoformat() if r["last_session"] is not None else None, "period_end": end.isoformat()}
+    if ps is not None and len(ps.frame) and part.index[-1] <= ps.frame.index[-1]:
+        return None  # that period is already a complete candle
+    return part
+
+
+def running_candle(s: Services, symbol: str, timeframe: str, cutoff, ps=None) -> dict[str, Any] | None:
+    """API record of the running period (``is_complete: false``), display only."""
+    from ..data.periods import partial_record
+
+    part = running_frame(s, symbol, timeframe, cutoff, ps)
+    return partial_record(part, timeframe, s.calendar) if part is not None else None

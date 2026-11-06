@@ -41,11 +41,13 @@ export function migrateLegacyOnce(): Promise<void> {
 }
 
 function strip(d: Drawing) {
-  const { version: _v, created_at: _c, updated_at: _u, origin: _o, ...rest } = d;
+  // server-managed fields are never sent back (the owner comes from the X-PAS-User header)
+  const { version: _v, created_at: _c, updated_at: _u, origin: _o, owner: _w, ...rest } = d;
   void _v;
   void _c;
   void _u;
   void _o;
+  void _w;
   return rest;
 }
 

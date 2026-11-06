@@ -29,6 +29,7 @@ import { OverlayPrimitive, type OverlayShape } from "./OverlayPrimitive";
 import { DrawingPrimitive, TimeMapper, type Anchor, type Drawing, type DrawingType } from "./drawings";
 import { useDrawingTools, type DrawStyle, type DrawTool } from "./useDrawingTools";
 import { chartDebug } from "./debug";
+import { toLineData } from "./lineData";
 
 /** Extra line pane supplied by a page (e.g. the Stage Analysis RS Line, E3). */
 export interface ExtraPane {
@@ -63,6 +64,13 @@ export interface ChartMarker {
   text?: string;
 }
 
+/** Volume bars to emphasise (e.g. a VCP's final-contraction dry-up, a breakout candle's volume). */
+export interface VolumeHighlight {
+  t0: number;
+  t1: number;
+  color: string;
+}
+
 export interface ChartHandle {
   screenshot: () => HTMLCanvasElement | null;
   paneStretch: () => number[];
@@ -85,8 +93,9 @@ export interface PatternChartProps {
   onCandleClick?: (info: { t: number; price: number }) => void;
   timeframe: ChartTf;
   detection: ChartDetection | null;
-  /** Multi-month timeframes: the running period (completed daily candles so far), drawn muted. */
+  /** 1W / multi-month: the running (incomplete) period from completed daily candles so far, drawn grey and labelled INCOMPLETE. */
   partialCandle?: PartialCandle | null;
+  volumeHighlights?: VolumeHighlight[];
   swings: Swing[];
   showOverlay: boolean;
   showSwings: boolean;
@@ -196,6 +205,7 @@ export function PatternChart(props: PatternChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const closeLineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const overlayRef = useRef<OverlayPrimitive | null>(null);
   const drawRef = useRef<DrawingPrimitive | null>(null);
@@ -259,10 +269,22 @@ export function PatternChart(props: PatternChartProps) {
       wickDownColor: C.candleDown,
       priceLineVisible: false,
     });
+    // Line chart mode: a LineSeries of closes on the same price scale. Overlays, drawings
+    // and markers stay attached to the (then transparent) candle series, so every
+    // (time, price) anchor maps to the same pixel in both modes.
+    const closeLine = chart.addSeries(LineSeries, { color: C.lineClose, lineWidth: 2, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: true, visible: false });
+    closeLineRef.current = closeLine;
     const overlay = new OverlayPrimitive();
     series.attachPrimitive(overlay);
     const drawingLayer = new DrawingPrimitive();
     series.attachPrimitive(drawingLayer);
+    chartDebug.anchorPixels = () => {
+      const m = drawingLayer.mapper();
+      const out: Record<string, (number | null)[][]> = {};
+      if (!m) return out;
+      for (const d of drawingLayer.drawings) out[d.drawing_id] = d.anchors.map((a) => [m.x(a.t), m.y(a.p)]);
+      return out;
+    };
     const markers = createSeriesMarkers(series, []);
     const moved = () => {
       userMovedRef.current = true;
@@ -274,6 +296,13 @@ export function PatternChart(props: PatternChartProps) {
     });
     chartRef.current = chart;
     candleRef.current = series;
+    // a new chart: no stale counters from the previous one (UI checks wait for these)
+    chartDebug.candles = 0;
+    chartDebug.lastCandleTime = null;
+    chartDebug.overlayShapes = 0;
+    chartDebug.overlayKinds = {};
+    chartDebug.techMarkers = {};
+    chartDebug.markers = 0;
     overlayRef.current = overlay;
     drawRef.current = drawingLayer;
     markersRef.current = markers;
@@ -334,6 +363,8 @@ export function PatternChart(props: PatternChartProps) {
       chart.remove();
       chartRef.current = null;
       candleRef.current = null;
+      closeLineRef.current = null;
+      chartDebug.anchorPixels = () => ({});
       overlayRef.current = null;
       drawRef.current = null;
       markersRef.current = null;
@@ -363,26 +394,44 @@ export function PatternChart(props: PatternChartProps) {
     const lastT = candles.length ? candles[candles.length - 1].t : -Infinity;
     return [...candles.map((c) => c.t), ...(partial ? [partial.t] : []), ...futureBars.filter((f) => f.t > Math.max(lastT, partial?.t ?? -Infinity)).map((f) => f.t)];
   }, [candles, futureBars, partial]);
+  const lineMode = prefs.chartType === "line";
   useEffect(() => {
     const series = candleRef.current;
+    const closeLine = closeLineRef.current;
     if (!series) return;
     // Future bars are whitespace: they give projected geometry its true bar
     // spacing on the index-based time scale without inventing candles.
     const lastT = candles.length ? candles[candles.length - 1].t : -Infinity;
-    const muted = "rgba(139,155,165,0.55)";
+    const muted = "rgba(139,155,165,0.5)"; // the running (incomplete) period: neutral grey, reduced opacity
+    const clear = "rgba(0,0,0,0)";
+    series.applyOptions(
+      lineMode
+        ? { upColor: clear, downColor: clear, borderUpColor: clear, borderDownColor: clear, wickUpColor: clear, wickDownColor: clear, lastValueVisible: false }
+        : { upColor: C.candleUp, downColor: C.candleDown, borderUpColor: C.candleUp, borderDownColor: C.candleDown, wickUpColor: C.candleUp, wickDownColor: C.candleDown, lastValueVisible: true },
+    );
+    const pc = lineMode ? clear : muted;
+    const whitespace = futureBars.filter((f) => f.t > Math.max(lastT, partial?.t ?? -Infinity)).map((f) => ({ time: ts(f.t) }));
     series.setData([
       ...candles.map((c) => ({ time: ts(c.t), open: c.o, high: c.h, low: c.l, close: c.c })),
-      // The running multi-month period: a separate, muted candle (incomplete).
-      ...(partial ? [{ time: ts(partial.t), open: partial.o, high: partial.h, low: partial.l, close: partial.c, color: muted, borderColor: muted, wickColor: muted }] : []),
-      ...futureBars.filter((f) => f.t > Math.max(lastT, partial?.t ?? -Infinity)).map((f) => ({ time: ts(f.t) })),
+      // The running 1W / multi-month period: a separate, grey candle (incomplete).
+      ...(partial ? [{ time: ts(partial.t), open: partial.o, high: partial.h, low: partial.l, close: partial.c, color: pc, borderColor: pc, wickColor: pc }] : []),
+      ...whitespace,
     ]);
+    const pts = lineMode ? toLineData(candles, partial) : [];
+    closeLine?.applyOptions({ visible: lineMode });
+    closeLine?.setData([...pts.map((p) => (p.partial ? { time: ts(p.t), value: p.v, color: muted } : { time: ts(p.t), value: p.v })), ...(lineMode ? whitespace : [])]);
+    chartDebug.chartType = lineMode ? "line" : "candle";
+    chartDebug.linePoints = pts.length;
+    chartDebug.lineFirst = pts.length ? { t: pts[0].t, v: pts[0].v } : null;
+    chartDebug.lineLast = pts.length ? { t: pts[pts.length - 1].t, v: pts[pts.length - 1].v } : null;
     chartDebug.partialCandle = !!partial;
+    chartDebug.partialT = partial?.t ?? null;
     drawRef.current?.update({ timeMap: new TimeMapper(dataTimes) });
     chartDebug.candles = candles.length;
     chartDebug.firstCandleTime = candles[0]?.t ?? null;
     chartDebug.lastCandleTime = candles[candles.length - 1]?.t ?? null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, futureBars, dataTimes, partial?.t, partial?.c]);
+  }, [candles, futureBars, dataTimes, partial?.t, partial?.c, lineMode]);
 
   // ---- EMA overlays (backend values only; nothing is computed here)
   const emaKey = JSON.stringify(prefs.emas);
@@ -435,10 +484,13 @@ export function PatternChart(props: PatternChartProps) {
     let pane = 1;
     if (showVolume) {
       next.volume = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false }, pane++);
+      const hl = props.volumeHighlights ?? [];
+      const colorAt = (t: number, base: string) => hl.find((x) => t >= x.t0 && t <= x.t1)?.color ?? base;
       next.volume.setData([
-        ...candles.map((c) => (c.v === null ? { time: ts(c.t) } : { time: ts(c.t), value: c.v, color: c.c >= c.o ? C.volumeUp : C.volumeDown })),
+        ...candles.map((c) => (c.v === null ? { time: ts(c.t) } : { time: ts(c.t), value: c.v, color: colorAt(c.t, c.c >= c.o ? C.volumeUp : C.volumeDown) })),
         ...(partial && partial.v !== null ? [{ time: ts(partial.t), value: partial.v, color: "rgba(139,155,165,0.3)" }] : []),
       ]);
+      chartDebug.volumeHighlights = hl.length;
     }
     if (prefs.showRsi && indicators) {
       const rsi = chart.addSeries(
@@ -486,7 +538,7 @@ export function PatternChart(props: PatternChartProps) {
     chartDebug.rsiLevels = next.rsiLines.length;
     reapplyView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, showVolume, indicators, prefs.showRsi, prefs.showAtr, prefs.rsiOverbought, prefs.rsiOversold, extraKey, partial?.t, partial?.v]);
+  }, [candles, showVolume, indicators, prefs.showRsi, prefs.showAtr, prefs.rsiOverbought, prefs.rsiOversold, extraKey, partial?.t, partial?.v, JSON.stringify(props.volumeHighlights ?? [])]);
 
   // ---- backend geometry + technical overlays -> line series, markers, primitives
   useEffect(() => {
@@ -631,6 +683,11 @@ export function PatternChart(props: PatternChartProps) {
       chartDebug.divergenceSegments = 0;
       chartDebug.dailyLevels = 0;
     }
+    if (partial) {
+      // the running (incomplete) period, labelled on the chart
+      markers.push({ time: ts(partial.t), position: "aboveBar", shape: "circle", color: "rgba(139,155,165,0.9)", text: "INCOMPLETE", size: 0.4 } as SeriesMarker<Time>);
+    }
+    chartDebug.partialMarker = !!partial;
     for (const m of props.extraMarkers ?? []) {
       if (!byTimeRef.current.has(m.t)) continue;
       markers.push({ time: ts(m.t), position: m.position === "above" ? "aboveBar" : m.position === "below" ? "belowBar" : "inBar", shape: m.shape, color: m.color, text: m.text, size: 1 } as SeriesMarker<Time>);
@@ -646,10 +703,11 @@ export function PatternChart(props: PatternChartProps) {
     chartDebug.markerRoles = roles;
     chartDebug.techMarkers = techRoles;
     chartDebug.overlayShapes = shapes.length;
+    chartDebug.overlayKinds = shapes.reduce<Record<string, number>>((acc, x) => ((acc[x.kind] = (acc[x.kind] ?? 0) + 1), acc), {});
     chartDebug.detectionId = detection?.pattern_id ?? null;
     reapplyView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detection, showOverlay, showSwings, swings, candles, zones, showZones, extraShapes, props.extraMarkers, tech, prefs.showMarubozu, prefs.showBreakouts, prefs.showDailyLevels, prefs.showDivergence, timeframe, indicators, prefs.showRsi]);
+  }, [detection, showOverlay, showSwings, swings, candles, zones, showZones, extraShapes, props.extraMarkers, tech, prefs.showMarubozu, prefs.showBreakouts, prefs.showDailyLevels, prefs.showDivergence, timeframe, indicators, prefs.showRsi, partial?.t]);
 
   // ---- manual drawings (separate primitive; never touches detector geometry)
   const drawings = props.drawings ?? [];
@@ -741,7 +799,7 @@ export function PatternChart(props: PatternChartProps) {
           <span className="ml-2">Vol <span className="text-ink">{fmtVolume(shown.v)}</span></span>
           {hoverPartial && partial && (
             <span className="ml-2 text-forming" data-testid="partial-legend">
-              incomplete period: {partial.sessions} sessions to {fmtBarTime(partial.last_session, "1d")}
+              INCOMPLETE: {partial.sessions} session{partial.sessions === 1 ? "" : "s"} to {fmtBarTime(partial.last_session, "1d")}
             </span>
           )}
           {indicators && li !== null && (

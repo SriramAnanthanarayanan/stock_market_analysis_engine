@@ -62,6 +62,7 @@ def scan_summary(scan: dict[str, Any] | None) -> dict[str, Any] | None:
     keys = (
         "scan_id", "universe", "timeframe", "asof", "state", "finished_at", "data_cutoff", "successful_symbols", "failed_symbols",
         "price_basis", "signal_config_version", "signal_config_hash", "vcp_config_version", "vcp_config_hash", "tech_config_version",
+        "ipo_config_version", "ipo_config_hash",
     )
     return {k: scan.get(k) for k in keys}
 
@@ -174,6 +175,76 @@ def scan_fresh_breakouts(
             f"{cfg.fresh_buffer_atr} x ATR({cfg.atr_period}); the previous candle is judged on its own window; one event per episode "
             f"(re-armed after {cfg.fresh_rearm_closes} closes back inside the prior range). 'First Breakout in Lookback' means no close "
             f"beyond its own level in the preceding {n} sessions - not the first breakout in the stock's history. Not trade recommendations."
+        ),
+    }
+
+
+# ------------------------------------------------------------------ about to break out (10-day level)
+SETUP_RANK = {"breakout": 0, "confirmed_breakout": 1, "touched": 2, "very_near": 3, "approaching": 4, "rejected": 5, "expired": 6}
+
+
+@router.get("/scan/breakout-setups")
+def scan_breakout_setups(
+    request: Request,
+    universe: Universe = "all",
+    asof: date | None = None,
+    direction: Literal["bullish", "bearish", "both"] = "bullish",
+    state: str | None = Query(None, max_length=200, description="comma-separated states (default: approaching, very_near, touched, breakout, confirmed_breakout)"),
+    include_rejected: bool = False,
+    include_expired: bool = False,
+    min_quality: float = Query(0.0, ge=0, le=100),
+    fno: Literal["YES", "NO", "UNKNOWN"] | None = None,
+) -> dict[str, Any]:
+    """Stocks about to break out of (or just breaking) their previous 10-day high / low,
+    with distance %, distance ATR, EMA 20/50, volume ratio, RS, Stage and a setup quality."""
+    from ..signals.breakouts import SETUP_LABELS, setup_quality
+    from .vcp import stage_context
+
+    _check_asof(asof)
+    s = svc(request)
+    cfg = s.signal_cfg
+    scan = find_latest_scan(s.engine, universe, "1d", asof)
+    if scan is None:
+        return _empty(None, NO_SCAN)
+    if not has_signals(scan):
+        return _empty(scan, NO_SIGNALS)
+    wanted = set(state.split(",")) if state else {"approaching", "very_near", "touched", "breakout", "confirmed_breakout"} | ({"rejected"} if include_rejected else set()) | ({"expired"} if include_expired else set())
+    unknown = wanted - set(SETUP_LABELS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown setup state {sorted(unknown)}; allowed {sorted(SETUP_LABELS)}")
+    t = db.signal_evidence
+    rows = evidence_rows(s, scan["scan_id"], universe, ("fresh_breakout",), and_(t.c.kind == "state", t.c.status.in_(sorted(wanted))))
+    ctx, wscan = stage_context(s, universe, asof)
+    items = []
+    for e in rows:
+        r = _row(e)
+        if direction != "both" and r["direction"] != direction:
+            continue
+        if fno and r["fno_status"] != fno:
+            continue
+        st = ctx.get(r["symbol"])
+        r["stage"] = st
+        r["rs"] = st.get("rs") if st else None
+        q, comps = setup_quality(r, r["rs"], st["stage"] if st else None, cfg)
+        r["setup_quality"], r["setup_quality_components"] = q, comps
+        if q < min_quality:
+            continue
+        items.append(r)
+    items.sort(key=lambda r: (SETUP_RANK.get(r["state"], 9), -r["setup_quality"], r.get("distance_pct") or 0))
+    return {
+        "scan": scan_summary(scan),
+        "stage_scan": wscan,
+        "count": len(items),
+        "items": items,
+        "state_labels": SETUP_LABELS,
+        "thresholds": {"approach_pct": cfg.about_to_breakout_pct, "approach_atr": cfg.about_to_breakout_atr, "very_near_pct": cfg.very_near_pct, "very_near_atr": cfg.very_near_atr, "rule": cfg.about_to_breakout_rule, "expiry_sessions": cfg.setup_expiry_sessions, "rejection_sessions": cfg.setup_rejection_sessions},
+        "note": (
+            f"10D high = highest high of the previous {cfg.fresh_lookback_days} completed daily candles (current excluded). "
+            f"Approaching: within {cfg.about_to_breakout_pct} % {'and' if cfg.about_to_breakout_rule == 'both' else 'or'} {cfg.about_to_breakout_atr} ATR below it; "
+            f"Very Near: within {cfg.very_near_pct} % / {cfg.very_near_atr} ATR; Touched: intraday at or through the level, close still near it; "
+            "Breakout / Confirmed Breakout: the existing fresh-crossing rule (one / two closes); Rejected: a push through that closed back away, "
+            f"or a breakout that closed back inside within {cfg.setup_rejection_sessions} sessions; Expired: stopped approaching within {cfg.setup_expiry_sessions} sessions without a breakout. "
+            "Setup quality is an explainable screening score, not a probability. Not trade recommendations."
         ),
     }
 
@@ -378,6 +449,14 @@ def vcp_config(request: Request) -> dict[str, Any]:
     for p in out["parameters"]:
         p["basis"] = "source" if p["name"] in VCP_SOURCE_PARAMS else ("engineering" if p["description"].startswith(("ENGINEERING", "ASSUMPTION")) else "engineering")
     return out
+
+
+@router.get("/config/ipo")
+def ipo_config(request: Request) -> dict[str, Any]:
+    from ..config import IPO_PARAM_META
+
+    s = svc(request)
+    return _config(s.ipo_cfg, IPO_PARAM_META)
 
 
 @router.get("/config/confluence")
