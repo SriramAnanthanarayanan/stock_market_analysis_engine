@@ -21,7 +21,7 @@ Sub-panes are rebuilt in a fixed order whenever their visibility changes; pane h
 * Fit (zoom out to the whole cached history, e.g. daily since 1996), Log (logarithmic price scale, saved with the chart preferences; equal % moves look equal across decades), Reset zoom (focus the selected formation), Latest candle, mouse-wheel zoom, drag to pan, crosshair. Charts carry the full history; they open on the latest bars or the selected formation.
 * **Candles / Line** switch (also in the chart preview): see "Line chart" below. Saved with the chart preferences.
 * **Ind. incl. incomplete**: on 1W and the multi-month timeframes, also compute EMA / RSI / ATR on the running (incomplete) candle; off by default (`docs/multi-month-timeframes.md`).
-* Overlay chips **VCP (1D)** and **IPO base** (daily charts) draw the stored VCP structure and IPO base of the latest daily scan.
+* Overlay chips **VCP (1D)** and **IPO base** (daily charts) draw the stored VCP structure and IPO base of the latest daily scan; **Multi-year** draws every multi-year breakout of the stock's history (resistance line from the base start, breakout marker) on 1D, 1W and the multi-month charts. Overlays and markers that carry daily times are placed on the bar containing them on weekly / multi-month charts (a start before the first loaded candle begins at the left edge).
 * Save layout / Restore layout (indicator settings + pane heights), PNG export (`chart.takeScreenshot()`).
 
 Changing an EMA period, the RSI period or the ATR period re-requests the series from the backend - nothing is computed in the browser.

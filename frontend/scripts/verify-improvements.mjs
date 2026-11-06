@@ -5,7 +5,7 @@
 //   node scripts/verify-improvements.mjs [screenshotDir] [baseUrl]
 //   node scripts/verify-improvements.mjs [screenshotDir] [baseUrl] --after-restart
 // Needs backend + frontend with completed 1W and 1D scans (the synthetic demo:
-// backend/scripts/synthetic_demo.py has VCP4T, SETUP10, IPONEW, IPOBASE). It WRITES
+// backend/scripts/synthetic_demo.py has VCP4T, SETUP10, IPONEW, IPOBASE, MULTI10, MULTI2). It WRITES
 // test drawings for VCP4T (local user) and one for user "verify-b"; the restart run removes them.
 // Browser: Edge / Chrome channel, or PW_EXECUTABLE=/path/to/chromium.
 import { chromium } from "playwright-core";
@@ -294,9 +294,62 @@ try {
     await page.click('[data-testid="cf-screen-all"]');
     await settle();
 
+    // ------------------------------------------------------------ F2. multi-year breakouts
+    console.log("Multi-year breakouts");
+    await page.click('[data-testid="nav-multiyear"]');
+    await page.waitForSelector('[data-testid="multiyear-table-row"]', { timeout: 15000 });
+    const yrs = await rows("multiyear-table").filter({ hasText: "MULTI10" }).first().locator("[data-years]").getAttribute("data-years");
+    check("multi-year: MULTI10 closes above a ~10-year resistance (default 5+ years)", Number(yrs) >= 9.5 && Number(yrs) <= 10.5, `${yrs} years`);
+    const setYears = async (v) => {
+      await page.fill('[data-testid="my-years"]', v);
+      await page.press('[data-testid="my-years"]', "Enter");
+      await page.waitForFunction((x) => location.search.includes(`years=${x}`), v, { timeout: 5000 }).catch(() => null);
+      await settle();
+    };
+    await setYears("12");
+    const at12 = await rows("multiyear-table").filter({ hasText: "MULTI10" }).count();
+    await setYears("7.5");
+    const at75 = await rows("multiyear-table").filter({ hasText: "MULTI10" }).count();
+    check("multi-year: any number of years (12+ hides it, 7.5+ shows it)", at12 === 0 && at75 === 1, `12+: ${at12}, 7.5+: ${at75}`);
+    const mp = await previewFrom("multiyear-table", "MULTI10");
+    await page.waitForFunction(() => (window.__pasChart.overlayKinds.segment ?? 0) >= 1 && (window.__pasChart.techMarkers.extra_marker ?? 0) >= 1, null, { timeout: 15000 }).catch(() => null);
+    const md = await dbg();
+    check(
+      "multi-year preview: weekly chart, resistance line from the base start + breakout marker",
+      md.timeframe === "1w" && (md.overlayKinds.segment ?? 0) >= 1 && (md.techMarkers.extra_marker ?? 0) >= 1 && (await page.textContent('[data-testid="preview-context"]')).includes("years below it"),
+      `${mp.sym} ${md.timeframe} ${JSON.stringify(md.overlayKinds)}`,
+    );
+    await page.screenshot({ path: join(outDir, "imp-multiyear-preview.png") });
+    await closePreview();
+    await page.click('[data-testid="my-tab-history"]');
+    await page.waitForSelector('[data-testid="multiyear-summary"]', { timeout: 15000 });
+    await page.waitForSelector('[data-testid="multiyear-history-table-row"]', { timeout: 15000 }).catch(() => null);
+    const sumRows = await page.locator('[data-testid="multiyear-summary"] tbody tr').count();
+    const histRows = await rows("multiyear-history-table").filter({ hasText: "MULTI2" }).count();
+    const cav = (await page.textContent('[data-testid="multiyear-caveats"]')) ?? "";
+    check("multi-year history: forward returns by horizon, past breakouts, caveats", sumRows === 6 && histRows >= 1 && cav.includes("Survivorship"), `${sumRows} horizons, MULTI2 rows ${histRows}`);
+    await page.screenshot({ path: join(outDir, "imp-multiyear-history.png") });
+    await page.goto(`${base}/explorer/MULTI10?tf=1mo`, { waitUntil: "networkidle" });
+    await chartReady();
+    await page.click('[data-testid="toggle-multiyear"]');
+    await page.waitForFunction(() => (window.__pasChart.overlayKinds.segment ?? 0) >= 1 && (window.__pasChart.techMarkers.extra_marker ?? 0) >= 1, null, { timeout: 15000 }).catch(() => null);
+    const td = await dbg();
+    check("chart terminal: Multi-year chip on the monthly chart (marker on the running month)", (td.overlayKinds.segment ?? 0) >= 1 && (td.techMarkers.extra_marker ?? 0) >= 1, JSON.stringify(td.overlayKinds));
+    await page.screenshot({ path: join(outDir, "imp-multiyear-terminal.png") });
+    await page.click('[data-testid="toggle-multiyear"]'); // leave the saved preferences as they were
+    await page.goto(`${base}/confluence`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="confluence-table-row"]', { timeout: 15000 });
+    await page.click('[data-testid="cf-screen-multiyear_breakout"]');
+    await settle();
+    const cfMy = await rows("confluence-table").filter({ hasText: "MULTI10" }).count();
+    const cfYears = cfMy ? await rows("confluence-table").filter({ hasText: "MULTI10" }).first().locator("[data-multiyear]").count() : 0;
+    check("confluence: 'Multi-year Breakout' screen lists it with its years", cfMy === 1 && cfYears === 1);
+    await page.click('[data-testid="cf-screen-all"]');
+    await settle();
+
     // ------------------------------------------------------------ G. the same preview from every scanner
     console.log("Every scanner opens the shared preview from the symbol");
-    for (const [nav, testid] of [["nav-scanner", null], ["nav-vcp", "vcp-table"], ["nav-ipo", "ipo-table"], ["nav-fresh-breakouts", "fresh-table"], ["nav-setups", "setup-table"], ["nav-volume", null], ["nav-candlesticks", null], ["nav-confluence", "confluence-table"]]) {
+    for (const [nav, testid] of [["nav-scanner", null], ["nav-vcp", "vcp-table"], ["nav-ipo", "ipo-table"], ["nav-fresh-breakouts", "fresh-table"], ["nav-setups", "setup-table"], ["nav-volume", null], ["nav-candlesticks", null], ["nav-confluence", "confluence-table"], ["nav-multiyear", "multiyear-table"]]) {
       await page.click(`[data-testid="${nav}"]`);
       await settle(1200);
       const link = page.locator('main [data-testid="symbol-link"]').first();

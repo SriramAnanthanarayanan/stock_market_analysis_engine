@@ -688,14 +688,46 @@ export function PatternChart(props: PatternChartProps) {
       markers.push({ time: ts(partial.t), position: "aboveBar", shape: "circle", color: "rgba(139,155,165,0.9)", text: "INCOMPLETE", size: 0.4 } as SeriesMarker<Time>);
     }
     chartDebug.partialMarker = !!partial;
+    // A marker at a daily time on a weekly / multi-month chart sits on the bar containing it.
+    const snap = (t: number): number | null => {
+      if (byTimeRef.current.has(t)) return t;
+      if (partial && t >= partial.t) return partial.t; // inside the running (incomplete) period
+      let lo = 0;
+      let hi = candles.length - 1;
+      if (hi < 0 || t < candles[0].t) return null;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (candles[mid].t <= t) lo = mid;
+        else hi = mid - 1;
+      }
+      const last = candles.length - 1;
+      if (lo === last && last > 0 && t - candles[last].t > candles[last].t - candles[last - 1].t) return null; // after the last bar
+      return candles[lo].t;
+    };
     for (const m of props.extraMarkers ?? []) {
-      if (!byTimeRef.current.has(m.t)) continue;
-      markers.push({ time: ts(m.t), position: m.position === "above" ? "aboveBar" : m.position === "below" ? "belowBar" : "inBar", shape: m.shape, color: m.color, text: m.text, size: 1 } as SeriesMarker<Time>);
+      const mt = snap(m.t);
+      if (mt === null) continue;
+      markers.push({ time: ts(mt), position: m.position === "above" ? "aboveBar" : m.position === "below" ? "belowBar" : "inBar", shape: m.shape, color: m.color, text: m.text, size: 1 } as SeriesMarker<Time>);
       techRoles.extra_marker = (techRoles.extra_marker ?? 0) + 1;
     }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     markersRef.current.setMarkers(markers);
-    if (extraShapes?.length) shapes.push(...extraShapes);
+    if (extraShapes?.length) {
+      // Page overlays may carry daily times (VCP / IPO / multi-year geometry, context levels): on a
+      // weekly or multi-month chart each time moves to the bar containing it; a start before the
+      // first loaded candle starts at the left edge, an end after the last candle ends there.
+      const firstBar = candles.length ? candles[0].t : null;
+      const lastBar = partial?.t ?? (candles.length ? candles[candles.length - 1].t : null);
+      const edge = (t: number): number => snap(t) ?? (firstBar !== null && t < firstBar ? firstBar : lastBar ?? t);
+      for (const x of extraShapes) {
+        if (x.kind === "segment" || x.kind === "zone") shapes.push({ ...x, t0: edge(x.t0), t1: edge(x.t1) });
+        else if (x.kind === "point" || x.kind === "vline") {
+          const t = snap(x.t);
+          if (t !== null) shapes.push({ ...x, t });
+          else if (x.kind === "point" && x.logical !== undefined) shapes.push(x); // projected: logical fallback
+        } else shapes.push({ ...x, points: x.points.map((pt) => ({ ...pt, t: snap(pt.t) ?? pt.t })) });
+      }
+    }
     overlayRef.current.setShapes(shapes);
     subRef.current.rsiOverlay?.setShapes(rsiShapes);
     chartDebug.lineSeries = linesRef.current.length;

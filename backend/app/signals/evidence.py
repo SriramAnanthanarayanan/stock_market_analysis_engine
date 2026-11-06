@@ -165,6 +165,30 @@ class Publisher:
                 explanation=[state.get("note") or f"52-week high {state.get('high_52w')} / low {state.get('low_52w')}; close {state.get('close')}."],
             )
 
+    def multiyear(self, events: list[dict[str, Any]], store_sessions: int, version: str, chash: str) -> None:
+        """Multi-year breakouts: recent events (scanner, confluence) + the stock's full history
+        (one state row: chart overlay and the event study)."""
+        from .multiyear import compact, recent
+
+        for e in recent(events, self.n, store_sessions):
+            vu, rule = self._event_expiry("multiyear", e["index"])
+            self.add(
+                source="multiyear", signal_type="multiyear_breakout", category="trigger", kind="event", direction="bullish",
+                signal_time=e["time"], signal_t=e["t"], age_bars=e["age_bars"], status=e["status"],
+                lifecycle="invalidated" if e["status"] == "failed" else "active", valid_until=vu, expiry_rule=rule,
+                strength=e["base_years"], underlying_id=e["event_id"], metrics=e, config_version=version, config_hash=chash,
+                explanation=e["explanation"],
+            )
+        if events:
+            last = events[-1]
+            self.add(
+                source="multiyear", signal_type="multiyear_history", category="context", kind="state", direction="neutral",
+                signal_time=last["latest_time"], signal_t=None, age_bars=0, status="history", lifecycle="active",
+                strength=max(e["base_years"] for e in events), metrics={"events": [compact(e) for e in events], "count": len(events), "data_start": last["data_start"]},
+                config_version=version, config_hash=chash, expiry_rule="state: valid until the next scan",
+                explanation=[f"{len(events)} multi-year breakouts in the history (bases of {min(e['base_years'] for e in events)} to {max(e['base_years'] for e in events)} years)."],
+            )
+
     def volume_shocks(self, shocks: list[dict[str, Any]], version: str, chash: str) -> None:
         for v in shocks:
             vu, rule = self._event_expiry("volume_shock", v["index"])

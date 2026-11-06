@@ -49,6 +49,7 @@ def create_app(settings: Settings | None = None, provider: MarketDataProvider | 
     from .api.drawings import router as drawings_router
     from .api.confluence import router as confluence_router
     from .api.ipo import router as ipo_router
+    from .api.multiyear import router as multiyear_router
     from .api.routes import router
     from .services import Services
 
@@ -80,6 +81,7 @@ def create_app(settings: Settings | None = None, provider: MarketDataProvider | 
     app.include_router(drawings_router)
     app.include_router(confluence_router)
     app.include_router(ipo_router)
+    app.include_router(multiyear_router)
 
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:

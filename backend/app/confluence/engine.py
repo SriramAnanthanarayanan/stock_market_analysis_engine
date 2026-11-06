@@ -245,6 +245,21 @@ def _trigger(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig, tf: str)
         else:
             it.status, it.strength = "expired", 0.0
             listed.append(it)
+    if direction == "bullish":
+        y0, y1 = cfg.multiyear_strength_years
+        for e in ev.get("multiyear"):
+            if e["kind"] != "event":
+                continue
+            m = _m(e)
+            years = float(m.get("base_years") or 0.0)
+            strength = cfg.multiyear_min_strength + (1.0 - cfg.multiyear_min_strength) * _clamp((years - y0) / (y1 - y0))
+            it = Item(e["evidence_id"], "multiyear", f"Multi-year breakout: {years:.1f}-year base ({e['age_bars']} sessions ago)", strength, "breakout_52w", time=e.get("signal_time"))
+            ok, why = _fresh(e, "multiyear", cfg)
+            if ok:
+                items.append(it)
+            else:
+                it.status, it.strength = why, 0.0
+                listed.append(it)
     for e in ev.get("fresh_breakout"):
         if e["kind"] != "state" or e["direction"] != direction or e["status"] not in cfg.setup_state_scores:
             continue
@@ -499,6 +514,9 @@ def summarize(primary: list[dict[str, Any]], context: list[dict[str, Any]], dire
     out["fresh_breakout"] = {"age": fb["age_bars"], "first_in_lookback": _m(fb).get("first_in_lookback"), "level": _m(fb).get("level")} if fb else None
     w52 = latest_event("week52")
     out["week52"] = {"age": w52["age_bars"], "level": _m(w52).get("level")} if w52 else None
+    mys = [e for e in ev.get("multiyear") if e["kind"] == "event" and direction == "bullish" and _fresh(e, "multiyear", cfg)[0]]
+    my = min(mys, key=lambda e: e.get("age_bars") or 0) if mys else None
+    out["multiyear"] = {"age": my["age_bars"], "years": _m(my).get("base_years"), "level": _m(my).get("level"), "meets_screen": (_m(my).get("base_years") or 0) >= cfg.multiyear_screen_years} if my else None
     want = "bullish_marubozu" if direction == "bullish" else "bearish_marubozu"
     mar = [e for e in ev.get("marubozu") if e["signal_type"] == want and _fresh(e, "marubozu", cfg)[0]]
     out["marubozu"] = {"age": min(e["age_bars"] for e in mar)} if mar else None

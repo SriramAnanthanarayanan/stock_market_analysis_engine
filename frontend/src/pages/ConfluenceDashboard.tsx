@@ -122,7 +122,7 @@ export function ConfluenceDashboard() {
       symbol: r.symbol,
       timeframe: r.timeframe,
       asof: asof || null,
-      show: ["breakouts", "marubozu", ...(withVcp ? ["vcp"] : [])],
+      show: ["breakouts", "marubozu", ...(withVcp ? ["vcp"] : []), ...(sm.multiyear ? ["multiyear"] : [])],
       context: {
         title: `Confluence ${r.score.toFixed(0)} - ${r.band} (${r.direction})`,
         lines: [
@@ -167,7 +167,22 @@ export function ConfluenceDashboard() {
       title: "Fresh 10-day breakout (still fresh), or the about-to-break-out state before it",
     },
     { key: "ipo", label: "IPO base", render: (r) => (r.summary.ipo_label ? <span className={r.summary.ipo_status === "breakout" ? "text-up" : r.summary.ipo_status === "near_pivot" ? "text-accent" : "text-muted"}>{r.summary.ipo_label}</span> : <span className="text-muted">-</span>), sort: (r) => r.summary.ipo_status ?? "" },
-    { key: "w52", label: "52W", render: (r) => (r.summary.week52 ? <span className={r.direction === "bullish" ? "text-up" : "text-down"}>{ago(r.summary.week52.age, r.timeframe)}</span> : <span className="text-muted">-</span>), sort: (r) => (r.summary.week52 ? -r.summary.week52.age : null), title: "52-week breakout (still fresh)" },
+    {
+      key: "w52",
+      label: "52W / multi-yr",
+      render: (r) =>
+        r.summary.multiyear ? (
+          <span className="font-medium text-accent" data-multiyear={r.summary.multiyear.years ?? ""} title={`multi-year breakout: ${r.summary.multiyear.years?.toFixed(1)}-year resistance ${fmtNum(r.summary.multiyear.level)}`}>
+            {r.summary.multiyear.years?.toFixed(1)}y · {ago(r.summary.multiyear.age, r.timeframe)}
+          </span>
+        ) : r.summary.week52 ? (
+          <span className={r.direction === "bullish" ? "text-up" : "text-down"}>{ago(r.summary.week52.age, r.timeframe)}</span>
+        ) : (
+          <span className="text-muted">-</span>
+        ),
+      sort: (r) => (r.summary.multiyear ? 1000 + (r.summary.multiyear.years ?? 0) : r.summary.week52 ? -r.summary.week52.age : null),
+      title: "52-week breakout (still fresh); a multi-year breakout shows its years below the resistance",
+    },
     { key: "maru", label: "Marubozu", render: (r) => (r.summary.marubozu ? ago(r.summary.marubozu.age, r.timeframe) : <span className="text-muted">-</span>), sort: (r) => (r.summary.marubozu ? -r.summary.marubozu.age : null) },
     { key: "vs", label: "Vol shock", render: (r) => (r.summary.volume_shock ? <span title={`${r.summary.volume_shock.direction} volume shock`}>{r.summary.volume_shock.rvol.toFixed(1)}x · {ago(r.summary.volume_shock.age, r.timeframe)}</span> : <span className="text-muted">-</span>), sort: (r) => r.summary.volume_shock?.rvol ?? null },
     { key: "pat", label: "Pattern", render: (r) => (r.summary.pattern ? <span title={`quality ${fmtNum(r.summary.pattern.quality, 0)}`}>{r.summary.pattern.name} <span className="text-muted">({humanize(r.summary.pattern.status)})</span></span> : <span className="text-muted">-</span>), sort: (r) => r.summary.pattern?.quality ?? null },

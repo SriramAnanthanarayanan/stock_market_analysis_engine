@@ -30,6 +30,7 @@ export interface ChartPrefs {
   showStage: boolean;
   showVcp: boolean; // VCP geometry from the latest daily scan (daily charts)
   showIpo?: boolean; // IPO base geometry from the latest daily scan (daily charts)
+  showMultiYear?: boolean; // multi-year breakouts of the stock's history (any timeframe from 1D up)
   logScale: boolean; // logarithmic price axis (long histories)
   chartType?: "candle" | "line"; // candlesticks or a line of closes (same data, same drawings)
   indicatorsIncludePartial?: boolean; // 1W / multi-month: EMA/RSI/ATR also on the running (incomplete) period
@@ -65,6 +66,7 @@ export const DEFAULT_PREFS: ChartPrefs = {
   showStage: false,
   showVcp: false,
   showIpo: false,
+  showMultiYear: false,
   logScale: false,
   chartType: "candle",
   indicatorsIncludePartial: false,

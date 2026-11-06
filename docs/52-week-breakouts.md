@@ -1,5 +1,7 @@
 # 52-week high breakouts and low breakdowns
 
+Breakouts above a resistance that held for **years** (5, 10, 15, 20 or any number) are a separate scanner with their own rule (the age of the resistance, not a fixed window): `docs/multi-year-breakouts.md`.
+
 Code: `backend/app/signals/breakouts.py` (`week52_state`, events from the shared crossing engine in `crossing.py`), official reference `backend/app/signals/nse52w.py`; run by every daily scan; API `GET /api/scan/52week`, `GET /api/52week/reference`, `POST /api/52week/reference/refresh`; page **52-Week Breakouts**. Parameters: `SignalConfig` (`w52_*`).
 
 ## Definitions (completed daily candles)

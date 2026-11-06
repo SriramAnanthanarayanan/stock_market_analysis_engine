@@ -352,6 +352,31 @@ def test_sector_strength_is_a_capped_bonus_and_never_alone():
     assert summarize([], [sector("improving")], "bullish", CFG)["sector_quadrant"] == "improving"
 
 
+
+def myb(age=0, years=10.0, status="holding", uid="my1"):
+    return ev("multiyear", "multiyear_breakout", category="trigger", age=age, status=status, lifecycle="invalidated" if status == "failed" else "active", uid=uid, metrics={"base_years": years, "level": 101.0})
+
+
+def test_multiyear_breakout_is_one_family_with_the_52_week_breakout():
+    from app.confluence.engine import summarize
+
+    r = score_symbol([myb(0, 12.0), w52(0, dist=0.3)], [], "bullish", CFG)
+    g = cat(r, "trigger")
+    st = statuses(g)
+    assert ("multiyear", "used") in st and ("week52", "overlapping") in st  # same move: never two full triggers
+    assert g["score"] == pytest.approx(1.0)
+    short = score_symbol([myb(0, 1.0)], [], "bullish", CFG)
+    assert cat(short, "trigger")["score"] == pytest.approx(CFG.multiyear_min_strength)
+    old = score_symbol([myb(CFG.freshness_sessions["multiyear"] + 1, 12.0)], [], "bullish", CFG)
+    assert ("multiyear", "expired") in statuses(cat(old, "trigger"))
+    failed = score_symbol([myb(0, 12.0, status="failed")], [], "bullish", CFG)
+    assert ("multiyear", "invalidated") in statuses(cat(failed, "trigger"))
+    assert cat(score_symbol([myb(0, 12.0)], [], "bearish", CFG), "trigger")["score"] == 0.0  # bullish evidence only
+    sm = summarize([myb(2, 7.5)], [], "bullish", CFG)["multiyear"]
+    assert sm["years"] == 7.5 and sm["age"] == 2 and sm["meets_screen"] is True
+    assert summarize([myb(0, 3.0)], [], "bullish", CFG)["multiyear"]["meets_screen"] is False
+
+
 # ---------------------------------------------------------------- snapshots + API
 
 @pytest.fixture(scope="module")
@@ -523,7 +548,7 @@ def test_weekly_snapshot_and_config_endpoint(adv):
     assert cfg["version"] == CFG.version and cfg["config_hash"] == KNOWN_CONFLUENCE_CONFIG_HASHES[CFG.version]
     names = {p["name"] for p in cfg["parameters"]}
     assert {"weights", "bands", "freshness_sessions", "min_coverage", "combo_points"} <= names
-    assert len(client.get("/api/confluence/screens").json()["items"]) == 11
+    assert len(client.get("/api/confluence/screens").json()["items"]) == 12
 
 
 def test_no_snapshot_without_a_scan(tmp_path_factory):

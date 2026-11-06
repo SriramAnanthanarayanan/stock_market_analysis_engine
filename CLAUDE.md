@@ -2,13 +2,13 @@
 
 Project memory for Claude Code sessions in this repository. It describes what the project is, how to run and verify it, what you must never break, where the project stands, and what comes next.
 
-Last updated: 2026-11-05.
+Last updated: 2026-11-06.
 
 ## What this is
 
 This is a personal market-analysis app for NSE stocks (NIFTY 500 plus F&O). It has two parts:
 
-- A **FastAPI backend** finds chart patterns with deterministic numeric rules, then computes indicators, index rotation (RRG), the user's own Stage Analysis setup and the advanced scanners (fresh 10-day breakouts, About to Break Out, Volume Shocker, 52-week breakouts, VCP, IPO Base Breakout), stores every result as normalized evidence and scores stocks on a Confluence Dashboard.
+- A **FastAPI backend** finds chart patterns with deterministic numeric rules, then computes indicators, index rotation (RRG), the user's own Stage Analysis setup and the advanced scanners (fresh 10-day breakouts, About to Break Out, Volume Shocker, 52-week breakouts, Multi-Year Breakouts, VCP, IPO Base Breakout), stores every result as normalized evidence and scores stocks on a Confluence Dashboard.
 - A **React frontend** draws the backend's exact geometry on interactive TradingView-style charts.
 
 The user mainly uses the frontend to review charts.
@@ -69,9 +69,9 @@ What the first start of a fresh clone does:
   - `api/`: HTTP endpoints.
   - `evaluation/`: labels and precision/recall.
   - `analytics/`: support/resistance zones and outcomes.
-  - `signals/`: shared crossing engine, fresh 10-day + 52-week breakouts, Volume Shocker, normalized evidence (`evidence.py`), NSE 52-week reference.
+  - `signals/`: shared crossing engine, fresh 10-day + 52-week breakouts, multi-year breakouts (`multiyear.py`), Volume Shocker, normalized evidence (`evidence.py`), NSE 52-week reference.
   - `vcp/`: VCP detector v2. `ipo/`: IPO base detector. `confluence/`: confluence score + snapshots. `drawings.py`: chart drawings in the DB (per user). `data/periods.py`: 1/3/6/12-month candles and the running (incomplete) 1W / multi-month candle.
-  - `synthetic*.py`: deterministic fixtures (`synthetic_vcp.py`, `synthetic_ipo.py` for VCP / IPO base).
+  - `synthetic*.py`: deterministic fixtures (`synthetic_vcp.py`, `synthetic_ipo.py`, `synthetic_multiyear.py` for VCP / IPO base / multi-year breakouts).
   - `scripts/synthetic_demo.py`: offline demo server with SYNTHETIC data (for UI checks without network).
 - **Frontend:** React 18, Vite 5 (strictPort 5191, `/api` proxied to 8031), Tailwind v3, Lightweight Charts v5, TypeScript.
   - `src/charts/PatternChart.tsx` is the chart component (candles or a close line, `lineData.ts`; running candle grey + INCOMPLETE). `vcpOverlay.ts` draws the VCP structure and the IPO base.
@@ -82,22 +82,22 @@ What the first start of a fresh clone does:
   - Metadata is in the `market_data` table.
   - Committed snapshots are in `backend/data/`: `nse_holidays.json` (tests need it), `nifty500.csv`, `nse_fno.csv`, `index_intraday_candidates.json`.
 
-## Current status (2026-11-05)
+## Current status (2026-11-06)
 
 | Area | State |
 |---|---|
 | P1 to P3 | Done. 17 patterns, S/R zones, lifecycle, cross-scan tracks, outcomes, labelling, evaluation, compare, sweep, exports. |
 | E1 to E3 | Done. Raw price basis, EMA/RSI/ATR, divergence, Marubozu, 10-day breakouts, chart terminal with drawing tools, NSE index registry, Index Analysis, RRG, Stage Analysis and RS Line. |
 | A1 to A4 | Done (merged to main). A1 fresh/first-time 10-day breakouts, Volume Shocker, 52-week breakouts, `signal_evidence`. A2 VCP detector + scanner. A3 chart preview drawer, fullscreen, 1/3/6/12-month candles, performance horizons, Fibonacci retracement/extension, drawings in the DB. A4 Confluence Dashboard. Built and UI-verified on **synthetic** data only (the cloud session had no Yahoo/NSE access); not yet run on a live scan. |
-| A5 | Done (merged to main). Candlestick / line chart switch; running (incomplete) 1W / multi-month candle (`is_complete`, grey, never used by detectors, indicators optional); VCP detector v2 (successive contractions, 7 states, 6-part score, structure overlay); IPO Base Breakout scanner (official NSE listing dates); 10-day About to Break Out states; confluence 1.1 (setups, IPO base, dry-up, Marubozu + volume, sector strength, 11 screens); drawings per user (`X-PAS-User`) + creating timeframe + text notes; universal preview from every scanner. Built and UI-verified on **synthetic** data only. |
+| A5 | Done (merged to main). Candlestick / line chart switch; running (incomplete) 1W / multi-month candle (`is_complete`, grey, never used by detectors, indicators optional); VCP detector v2 (successive contractions, 7 states, 6-part score, structure overlay); IPO Base Breakout scanner (official NSE listing dates); 10-day About to Break Out states; Multi-Year Breakouts (any number of years, failure / re-break, History tab with forward returns vs NIFTY 50; overlays snap daily times onto weekly / monthly bars); confluence 1.2 (setups, IPO base, multi-year, dry-up, Marubozu + volume, sector strength, 12 screens); drawings per user (`X-PAS-User`) + creating timeframe + text notes; universal preview from every scanner. Built and UI-verified on **synthetic** data only. |
 | DetectionConfig | **1.3.0**, hash `9c33f4bf86016487`. Tuned by chart review for H&S, doubles, flags and wedges; see `docs/pattern-tuning-1.3.0.md`. |
 | StageConfig | **1.3.0**. Implements the user's confluence entry setup. **Do not change.** |
 | TechnicalConfig / IndexConfig | 1.0.0 / 1.0.0 |
-| SignalConfig / VCPConfig / ConfluenceConfig / IPOConfig | 1.1.0 `bb601be383bb6721` / 2.0.0 `2159765b755d4287` / 1.1.0 `5a8786a62bf4fbfc` / 1.0.0 `a2f7e09abbcbc9c9`. Engineering defaults (ASSUMPTION-flagged), not validated. Same governance as DetectionConfig (`KNOWN_*_HASHES`, `*_PARAM_META`). |
+| SignalConfig / VCPConfig / ConfluenceConfig / IPOConfig | 1.2.0 `3f732a9d8a9675bd` / 2.0.0 `2159765b755d4287` / 1.2.0 `1d78ef4b3c742589` / 1.0.0 `a2f7e09abbcbc9c9`. Engineering defaults (ASSUMPTION-flagged), not validated. Same governance as DetectionConfig (`KNOWN_*_HASHES`, `*_PARAM_META`). |
 | DB schema | 9. Migration 9 added IPO config columns on `scans`, `stocks.listing_date` / `listing_date_source`, `chart_drawings.owner` (default `local`) / `created_timeframe`, VCP v2 contraction metrics. Migration 8 added `signal_evidence`, `vcp_formations`, `vcp_contractions`, `confluence_runs`, `confluence_snapshots`, `chart_drawings`, `chart_drawing_history`, `drawing_templates`, `nse_52w_reference` and signal/VCP config columns on `scans`. |
 | Data depth | Stocks 1D/1W: full Yahoo history (from 1996 or listing). 1H: Yahoo's ~730-day cap, and the local cache keeps growing. NSE indices: back to their start (NIFTY 50 from 1990). |
 | Charts | Send the whole history. Open on the latest bars or the selected formation. **Fit** shows everything; **Log** switches to a log price scale. |
-| Tests | pytest 548, `python -m app.selftest` 120, `npm test` 13 (Fibonacci maths, line data), verify-advanced 53 (+3 with `--after-restart`), verify-improvements 40 (+4 with `--after-restart`). Older UI suites need the live DB (see "How to verify"). |
+| Tests | pytest 565, `python -m app.selftest` 121, `npm test` 13 (Fibonacci maths, line data), verify-advanced 53 (+3 with `--after-restart`), verify-improvements 47 (+4 with `--after-restart`). Older UI suites need the live DB (see "How to verify"). |
 | Live 1D scan | 500 of 502 symbols, 334 detections (before A1-A4). BAGMANE and DUMMYHEG have no Yahoo data; that is expected. The first live scan after A1-A4 adds evidence, VCPs and the confluence snapshot without re-downloading history. |
 
 ## Hard rules: do not break
@@ -141,7 +141,7 @@ node scripts/verify-improvements.mjs <dir>   # A5; needs 1D + 1W scans; writes a
 node scripts/verify-improvements.mjs <dir> --after-restart
 ```
 
-- Without network access (cloud sessions): `backend\.venv\Scripts\python.exe scripts\synthetic_demo.py --port 8031 --data-dir <dir>` serves SYNTHETIC data (14 symbols incl. VCP4T four-contraction VCP, SETUP10 about to break out, IPONEW / IPOBASE listings) with 1W/1D/1H scans, and `npm run build; npx vite preview --port 5191 --strictPort` serves the UI. verify-advanced (53/53, restart 3/3) and verify-improvements (40/40, restart 4/4) pass there; the older suites expect live data: on the demo verify-ui 27/28, e1 36/37 (`E1_SYMBOL=RWALK E1_MIN_UNIVERSE=5`), e2 21/25, e3 12/14 - every miss is a data gap (no bullish flag, 11 vs 139 indices, no intraday index mapping, no RS divergence).
+- Without network access (cloud sessions): `backend\.venv\Scripts\python.exe scripts\synthetic_demo.py --port 8031 --data-dir <dir>` serves SYNTHETIC data (16 symbols incl. VCP4T four-contraction VCP, SETUP10 about to break out, IPONEW / IPOBASE listings, MULTI10 / MULTI2 multi-year breakouts) with 1W/1D/1H scans, and `npm run build; npx vite preview --port 5191 --strictPort` serves the UI. verify-advanced (53/53, restart 3/3) and verify-improvements (47/47, restart 4/4) pass there; the older suites expect live data: on the demo verify-ui 27/28, e1 36/37 (`E1_SYMBOL=RWALK E1_MIN_UNIVERSE=5`), e2 21/25, e3 12/14 - every miss is a data gap (no bullish flag, 11 vs 139 indices, no intraday index mapping, no RS divergence).
 - Browser for the UI scripts: Edge/Chrome channel, or `PW_EXECUTABLE=/path/to/chromium`.
 
 - `verify-p3.mjs` **writes labels and evaluation runs into the live DB**. Don't run it casually; if you do, delete its test labels afterwards.
@@ -175,7 +175,7 @@ node scripts/verify-improvements.mjs <dir> --after-restart
 6. **Chart payload is 1 to 2 MB** per full-history chart, with a ~4 to 6 s load. If it feels slow, add gzip or lazy-load older candles.
 7. Tracks start with P3 and have no back-fill of earlier scans.
 8. **Run the first live 1D + 1W scans with A1-A5** and look at the new scanners, the VCP v2 structure, IPO bases, About to Break Out and the Confluence Dashboard on real charts (all A1-A5 UI checks so far ran on synthetic data). The first live universe refresh also loads the NSE listing dates (EQUITY_L) the IPO base scanner needs.
-9. **Validate VCP v2 and the IPO base on labelled real charts** (thresholds are Minervini / O'Neil principles + engineering defaults; `docs/vcp-methodology.md`, `docs/ipo-base.md`). No accuracy may be claimed before that.
+9. **Validate VCP v2, the IPO base and multi-year breakouts on labelled real charts** (thresholds are Minervini / O'Neil principles + engineering defaults; `docs/vcp-methodology.md`, `docs/ipo-base.md`). No accuracy may be claimed before that.
 10. **Confluence weights, bands, strength mappings and freshness windows are placeholders**; calibrate after labelled outcomes exist (`docs/confluence-engine.md`). The industry -> sector index map is an ASSUMPTION.
 
 ## Docs index
@@ -194,4 +194,4 @@ node scripts/verify-improvements.mjs <dir> --after-restart
 - `docs/vcp-methodology.md`: A2.
 - `docs/chart-preview.md`, `docs/multi-month-timeframes.md`, `docs/fibonacci-tools.md`, `docs/chart-drawing-persistence.md`: A3.
 - `docs/confluence-engine.md`: A4.
-- `docs/about-to-breakout.md`, `docs/ipo-base.md`, `docs/vcp-methodology.md` (v2), plus the A5 sections of `docs/charting-tools.md` (line chart), `docs/multi-month-timeframes.md` (running candle), `docs/chart-drawing-persistence.md` (users, text notes): A5.
+- `docs/about-to-breakout.md`, `docs/ipo-base.md`, `docs/multi-year-breakouts.md`, `docs/vcp-methodology.md` (v2), plus the A5 sections of `docs/charting-tools.md` (line chart), `docs/multi-month-timeframes.md` (running candle), `docs/chart-drawing-persistence.md` (users, text notes): A5.

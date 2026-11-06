@@ -283,8 +283,8 @@ export function ExplorerView(props: ExplorerViewProps) {
   );
   const term = useChartTerminal("stock", termSrc, props.show);
   const chartShapes = useMemo(
-    () => [...(labelOpen ? labelPreview : []), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes],
-    [labelOpen, labelPreview, term.stageOverlay, term.vcpOverlay, term.ipoOverlay],
+    () => [...(labelOpen ? labelPreview : []), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes, ...term.multiYearOverlay.shapes],
+    [labelOpen, labelPreview, term.stageOverlay, term.vcpOverlay, term.ipoOverlay, term.multiYearOverlay],
   );
 
   const setTf = props.onTimeframe;
@@ -438,7 +438,7 @@ export function ExplorerView(props: ExplorerViewProps) {
               zones={data.sr_zones ?? []}
               showZones={toggles.sr}
               extraShapes={chartShapes}
-              extraMarkers={[...term.vcpOverlay.markers, ...term.ipoOverlay.markers]}
+              extraMarkers={[...term.vcpOverlay.markers, ...term.ipoOverlay.markers, ...term.multiYearOverlay.markers]}
               volumeHighlights={[...term.vcpOverlay.volume, ...term.ipoOverlay.volume]}
               onCandleClick={labelOpen ? (c) => setLastClick({ ...c, n: Date.now() }) : undefined}
               resetKey={resetKey}

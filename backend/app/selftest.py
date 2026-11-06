@@ -501,8 +501,19 @@ def advanced_checks(r: Runner, cal: NSECalendar) -> None:
         st = [x for x in run_signals(f, "1d", a, None, None, S, "T").setups if x["direction"] == "bullish"]
         return bool(st and st[0]["state"] == "very_near"), f"{[x['state'] for x in st]}"
 
+    def multiyear_ten():
+        from .signals.multiyear import multiyear_breakouts
+        from .synthetic_multiyear import MultiYearSpec, multiyear_frame
+
+        f = multiyear_frame(MultiYearSpec(), cal)
+        a = atr_wilder(f["high"].to_numpy(), f["low"].to_numpy(), f["close"].to_numpy(), 14)
+        ev = multiyear_breakouts(f, a, S, "T")
+        ok = len(ev) == 1 and 9.5 <= ev[0]["base_years"] <= 10.5 and ev[0]["age_bars"] == 0
+        return ok, f"{len(ev)} events, base {ev[0]['base_years'] if ev else None} years"
+
     r.check("adv", "IPO base: breakout above the post-listing base on volume", ipo_bo)
     r.check("adv", "10-day level: Very Near before the breakout", setup_very_near)
+    r.check("adv", "Multi-year breakout: close above a ~10-year-old resistance", multiyear_ten)
 
 
 def main() -> int:

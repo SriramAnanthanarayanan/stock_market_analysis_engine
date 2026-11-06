@@ -780,6 +780,8 @@ DETECTOR_TIMEFRAMES: dict[str, tuple[str, ...]] = {
     "week52": ("1d",),
     "volume_shocker": TIMEFRAMES,
     "vcp": ("1d",),
+    "ipo_base": ("1d",),
+    "multiyear_breakout": ("1d",),
     "stage_analysis": ("1w",),
     "rs_line": TIMEFRAMES,
     # Indicators are formulas, not detectors: shown on every chart timeframe,
@@ -795,7 +797,7 @@ def _vs_liquidity() -> dict[str, float]:
 
 @dataclass(frozen=True)
 class SignalConfig:
-    version: str = "1.1.0"
+    version: str = "1.2.0"
     atr_period: int = 14  # must equal DetectionConfig.atr_period (enforced by tests)
 
     # ---- Fresh N-day breakout (spec 3): previous N completed daily candles, current excluded
@@ -843,6 +845,17 @@ class SignalConfig:
     setup_expiry_sessions: int = 5
     setup_rejection_sessions: int = 3
 
+    # ---- Multi-year breakouts: a close above a resistance not exceeded for years (daily)
+    multiyear_min_years: float = 1.0
+    multiyear_zone_pct: float = 3.0
+    multiyear_buffer_atr: float = 0.0
+    multiyear_fail_closes: int = 5
+    multiyear_volume_lookback: int = 50
+    multiyear_test_separation_sessions: int = 20
+    multiyear_store_sessions: int = 250
+    multiyear_horizons_months: tuple[int, ...] = (1, 3, 6, 12, 24, 36)
+    multiyear_benchmark: str = "NIFTY 50"
+
 
 SIGNAL_PARAM_META: dict[str, ParamMeta] = {
     "atr_period": ParamMeta("ATR period, Wilder smoothing (TradingView ta.atr). Shared with pattern detection.", "bars", ("ATR",)),
@@ -883,6 +896,15 @@ SIGNAL_PARAM_META: dict[str, ParamMeta] = {
     "very_near_atr": ParamMeta("ASSUMPTION: Very Near ATR distance.", "x ATR", ("Fresh breakout",), ("1d",)),
     "setup_expiry_sessions": ParamMeta("ASSUMPTION: a setup that stopped approaching (or a breakout older than this) is Expired for this many sessions, then dropped.", "sessions", ("Fresh breakout",), ("1d",)),
     "setup_rejection_sessions": ParamMeta("ASSUMPTION: a breakout that closes back below its level within this many sessions is Rejected; so is an intraday push through the level that closes outside the Very Near distance.", "sessions", ("Fresh breakout",), ("1d",)),
+    "multiyear_min_years": ParamMeta("Multi-year breakouts with a base of at least this many years are stored; the scanner filters by any larger number (5, 10, 15, 20 ...).", "years", ("Multi-year",), ("1d",)),
+    "multiyear_zone_pct": ParamMeta("ASSUMPTION: the base starts at the first high within this % of the resistance (a marginal poke above an old high inside the zone does not restart the clock). 0 = the strict age of the exact high.", "%", ("Multi-year",), ("1d",)),
+    "multiyear_buffer_atr": ParamMeta("Breakout: completed close > resistance + this x ATR(14).", "x ATR", ("Multi-year",), ("1d",)),
+    "multiyear_fail_closes": ParamMeta("ASSUMPTION: this many consecutive completed closes back below the broken level -> Failed; a later close above the same base is then a re-break.", "closes", ("Multi-year",), ("1d",)),
+    "multiyear_volume_lookback": ParamMeta("Volume ratio of the breakout candle against the mean of the previous N completed sessions.", "sessions", ("Multi-year",), ("1d",)),
+    "multiyear_test_separation_sessions": ParamMeta("ASSUMPTION: highs inside the resistance zone count as separate tests when at least this many sessions apart.", "sessions", ("Multi-year",), ("1d",)),
+    "multiyear_store_sessions": ParamMeta("Breakouts within the last N completed sessions are stored as events (scanner, confluence); every older one is kept in the stock's history for the chart and the event study.", "sessions", ("Multi-year",), ("1d",)),
+    "multiyear_horizons_months": ParamMeta("Event study: forward price returns after each breakout at these horizons (descriptive; never used for detection).", "months", ("Multi-year",), ("1d",)),
+    "multiyear_benchmark": ParamMeta("Event study benchmark: official NSE index over the same calendar window (price index, like the stock's split-adjusted close).", "index", ("Multi-year",), ("1d",)),
 }
 
 
@@ -1047,7 +1069,7 @@ def _cf_bands() -> dict[str, float]:
 
 def _cf_freshness() -> dict[str, int]:
     # completed sessions (bars of the evidence timeframe) an event stays fresh
-    return {"fresh_breakout": 5, "week52": 5, "volume_shock": 3, "marubozu": 1, "pattern_breakout": 5, "vcp_breakout": 5, "ipo_breakout": 5}
+    return {"fresh_breakout": 5, "week52": 5, "volume_shock": 3, "marubozu": 1, "pattern_breakout": 5, "vcp_breakout": 5, "ipo_breakout": 5, "multiyear": 10}
 
 
 def _cf_combo() -> dict[str, float]:
@@ -1102,7 +1124,7 @@ def _cf_rrg() -> dict[str, float]:
 
 @dataclass(frozen=True)
 class ConfluenceConfig:
-    version: str = "1.1.0"
+    version: str = "1.2.0"
     weights: dict[str, float] = field(default_factory=_cf_weights)
     bands: dict[str, float] = field(default_factory=_cf_bands)
     freshness_sessions: dict[str, int] = field(default_factory=_cf_freshness)
@@ -1126,6 +1148,9 @@ class ConfluenceConfig:
     candle_share: float = 0.40
     forming_factor: float = 0.6
     non_first_breakout_factor: float = 0.8
+    multiyear_strength_years: tuple[float, float] = (1.0, 10.0)
+    multiyear_min_strength: float = 0.75
+    multiyear_screen_years: float = 5.0
 
 
 CONFLUENCE_PARAM_META: dict[str, ParamMeta] = {
@@ -1152,11 +1177,15 @@ CONFLUENCE_PARAM_META: dict[str, ParamMeta] = {
     "candle_share": ParamMeta("See volume_share.", "fraction", ("Confluence",)),
     "forming_factor": ParamMeta("Structure still forming (VCP Forming, pattern Forming) counts with this factor.", "factor", ("Confluence",)),
     "non_first_breakout_factor": ParamMeta("A fresh breakout that is not the first in its lookback counts with this factor.", "factor", ("Confluence",)),
+    "multiyear_strength_years": ParamMeta("ASSUMPTION: a multi-year breakout's trigger strength rises from multiyear_min_strength at the first number of years (base length) to 1.0 at the second. Same family as the 52-week breakout (one move, never counted twice).", "years", ("Confluence",), ("1d",)),
+    "multiyear_min_strength": ParamMeta("ASSUMPTION: trigger strength of the shortest stored multi-year breakout.", "0-1", ("Confluence",), ("1d",)),
+    "multiyear_screen_years": ParamMeta("Screen 'Multi-year Breakout': a fresh multi-year breakout with a base of at least this many years.", "years", ("Confluence",), ("1d",)),
 }
 
 KNOWN_SIGNAL_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "803155cbb7249f12",  # fresh 10-day breakouts, 52-week, Volume Shocker (initial engineering defaults)
     "1.1.0": "bb601be383bb6721",  # + about-to-break-out states of the 10-day level
+    "1.2.0": "3f732a9d8a9675bd",  # + multi-year breakouts (base >= 1 year stored; any N years filtered)
 }
 KNOWN_VCP_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "819cd0e5d2a261bc",  # VCP detector (Minervini principles + engineering thresholds)
@@ -1165,6 +1194,7 @@ KNOWN_VCP_CONFIG_HASHES: dict[str, str] = {
 KNOWN_CONFLUENCE_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "b1b29d836e9d6c12",  # five-category confluence score, placeholder weights
     "1.1.0": "5a8786a62bf4fbfc",  # + about-to-breakout, IPO base, VCP dry-up, Marubozu + volume, sector strength
+    "1.2.0": "1d78ef4b3c742589",  # + multi-year breakouts (52-week family, freshness 10, screen 5+ years)
 }
 KNOWN_IPO_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "a2f7e09abbcbc9c9",  # IPO base breakout (spec initial defaults + engineering assumptions)

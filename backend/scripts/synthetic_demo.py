@@ -48,6 +48,8 @@ UNIVERSE = [
     ("SETUP10", "Synthetic About-to-Break-Out Ltd.", True),
     ("IPONEW", "Synthetic IPO Breakout Ltd.", False),
     ("IPOBASE", "Synthetic IPO Base Ltd.", False),
+    ("MULTI10", "Synthetic Ten-Year Breakout Ltd.", True),
+    ("MULTI2", "Synthetic Earlier Multi-Year Breakout Ltd.", False),
 ]
 # industries mapped to sector indices of the fixture catalogue (sector-strength evidence)
 INDUSTRY = {"RWALK": "Information Technology", "VCPNEAR": "Metals & Mining", "VCP4T": "Information Technology", "SETUP10": "Metals & Mining"}
@@ -100,6 +102,7 @@ def setup10(cal: NSECalendar) -> pd.DataFrame:
 
 def frames(cal: NSECalendar) -> dict[tuple[str, str], pd.DataFrame]:
     from app.synthetic_ipo import IPOSpec, ipo_frame
+    from app.synthetic_multiyear import BREAKOUT, DEFAULT_SEGMENTS, MultiYearSpec, multiyear_frame
 
     four = dict(depths=(28, 15, 8, 4), recover=(0.99, 0.99, 0.99, 0.985), down_bars=(8, 6, 4, 3), up_bars=(8, 6, 5, 4), volumes=(1e5, 0.8e5, 0.6e5, 0.4e5))
     daily = {
@@ -117,6 +120,9 @@ def frames(cal: NSECalendar) -> dict[tuple[str, str], pd.DataFrame]:
         "SETUP10": setup10(cal),
         "IPONEW": ipo_frame(IPOSpec(tail=[(125.0, 3.0, 3.0e6)]), cal),
         "IPOBASE": ipo_frame(IPOSpec(tail=[(118.5, 1.0, 0.5e6), (119.0, 1.0, 0.5e6)]), cal),
+        # a ~10-year base broken 3 sessions ago; an ~8-year base broken ~2.8 years ago and an advance since
+        "MULTI10": multiyear_frame(MultiYearSpec(tail=BREAKOUT + [(105.0, 1.5, 1.0e6)] * 3), cal),
+        "MULTI2": multiyear_frame(MultiYearSpec(segments=DEFAULT_SEGMENTS[:5], tail=BREAKOUT + [(104.0 + k * 0.1, 1.5, 1.0e6) for k in range(1, 700)]), cal),
     }
     out: dict[tuple[str, str], pd.DataFrame] = {}
     for sym, d in daily.items():

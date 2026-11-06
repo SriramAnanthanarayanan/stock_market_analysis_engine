@@ -134,8 +134,8 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
   const firstT = candles[0]?.t ?? null;
   const lastT = last?.t ?? null;
   const vcp = term.vcp;
-  const shapes = useMemo(() => [...contextShapes(req, firstT, lastT), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes], [req, firstT, lastT, term.stageOverlay, term.vcpOverlay, term.ipoOverlay]);
-  const markers = useMemo(() => [...contextMarkers(req), ...term.vcpOverlay.markers, ...term.ipoOverlay.markers], [req, term.vcpOverlay, term.ipoOverlay]);
+  const shapes = useMemo(() => [...contextShapes(req, firstT, lastT), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes, ...term.multiYearOverlay.shapes], [req, firstT, lastT, term.stageOverlay, term.vcpOverlay, term.ipoOverlay, term.multiYearOverlay]);
+  const markers = useMemo(() => [...contextMarkers(req), ...term.vcpOverlay.markers, ...term.ipoOverlay.markers, ...term.multiYearOverlay.markers], [req, term.vcpOverlay, term.ipoOverlay, term.multiYearOverlay]);
   const volumeHighlights = useMemo(() => [...term.vcpOverlay.volume, ...term.ipoOverlay.volume], [term.vcpOverlay, term.ipoOverlay]);
   const focusT = vcp?.vcp?.geometry?.base.t_start ?? term.ipo?.geometry?.listing.t ?? req.context?.focusT ?? req.context?.markers?.[0]?.t ?? null;
   const name = loaded?.kind === "index" ? loaded.data.name : loaded?.kind === "stock" ? loaded.data.company : null;

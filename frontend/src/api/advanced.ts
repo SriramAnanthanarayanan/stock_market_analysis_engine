@@ -315,6 +315,111 @@ export const ipoApi = {
   symbol: (symbol: string, asof?: string | null) => request<{ symbol: string; source: string; ipo: IpoRow | null; listing_date: string | null; listing_date_source: string | null; note?: string }>(`/api/ipo/symbol${qs({ symbol, asof })}`),
 };
 
+// ---------------------------------------------------------------- multi-year breakouts
+export type MultiYearStatus = "holding" | "below_level" | "failed";
+
+export interface MultiYearHorizon {
+  months: number;
+  return_pct: number | null;
+  benchmark_pct: number | null;
+  excess_pct: number | null;
+  status: "ok" | "pending" | "no_data";
+}
+
+export interface MultiYearForward {
+  horizons: MultiYearHorizon[];
+  mfe_12m_pct: number | null;
+  mae_12m_pct: number | null;
+  window_complete_12m: boolean;
+}
+
+/** One breakout of a stock's history (compact form stored per scan). */
+export interface MultiYearEvent {
+  event_id: string;
+  t: number;
+  time: string;
+  close: number;
+  level: number;
+  level_t: number;
+  level_time: string;
+  level_years: number;
+  base_start_t: number;
+  base_start_time: string;
+  base_years: number;
+  base_starts_at_data_start: boolean;
+  base_depth_pct: number | null;
+  zone_tests: number;
+  all_time_high_in_data: boolean;
+  highest_since_time: string | null;
+  years_since_higher: number | null;
+  breakout_pct: number | null;
+  strength_atr: number | null;
+  volume_ratio: number | null;
+  rebreak: boolean;
+  status: MultiYearStatus;
+  failed_time: string | null;
+  return_since_pct: number | null;
+  max_gain_pct: number | null;
+  max_drawdown_pct: number | null;
+  forward: MultiYearForward;
+}
+
+export interface MultiYearRow extends StockRef, MultiYearEvent {
+  status_label: string;
+  age_bars: number;
+  latest_close: number | null;
+  latest_time: string | null;
+  above_level_pct: number | null;
+  zone_floor: number | null;
+  zone_test_times: string[];
+  data_start: string;
+  years_of_data: number;
+  rebreak_of_time: string | null;
+  explanation: string[];
+  past_events: MultiYearEvent[];
+}
+
+export interface MultiYearResult extends AdvResult<MultiYearRow> {
+  min_years?: number;
+  stored_min_years?: number;
+  status_labels?: Record<string, string>;
+  params?: Record<string, number | string>;
+}
+
+export interface MultiYearStudyEvent extends MultiYearEvent {
+  symbol: string;
+  company: string | null;
+  fno_status: FnoStatus;
+}
+
+export interface MultiYearStat {
+  n: number;
+  median: number | null;
+  mean: number | null;
+  pct_positive: number | null;
+}
+
+export interface MultiYearStudy {
+  scan: AdvScanSummary | null;
+  min_years?: number;
+  events_total?: number;
+  stocks?: number;
+  summary: (MultiYearStat & { months: number; pending: number; excess_n: number; excess_median: number | null; excess_mean: number | null; pct_beat_benchmark: number | null })[];
+  mfe_12m?: MultiYearStat;
+  mae_12m?: MultiYearStat;
+  benchmark?: string;
+  count: number;
+  items: MultiYearStudyEvent[];
+  caveats: string[];
+  note?: string;
+}
+
+export const multiYearApi = {
+  scan: (q: Q) => request<MultiYearResult>(`/api/scan/multiyear-breakouts${qs(q)}`),
+  symbol: (symbol: string, asof?: string | null) => request<{ symbol: string; source: string; events: MultiYearEvent[]; data_start: string | null; zone_pct: number; note?: string }>(`/api/multiyear/symbol${qs({ symbol, asof })}`),
+  study: (q: Q) => request<MultiYearStudy>(`/api/multiyear/study${qs(q)}`),
+};
+
 // ---------------------------------------------------------------- VCP
 export type VcpStatus = "developing" | "forming" | "final_contraction" | "near_pivot" | "breakout" | "failed_breakout" | "invalidated";
 
@@ -462,6 +567,7 @@ export interface ConfluenceSummary {
   vcp_label: string | null;
   fresh_breakout: { age: number; first_in_lookback: boolean | null; level: number | null } | null;
   week52: { age: number; level: number | null } | null;
+  multiyear?: { age: number; years: number | null; level: number | null; meets_screen: boolean } | null;
   marubozu: { age: number } | null;
   volume_shock: { age: number; rvol: number; direction: Direction } | null;
   pattern: { name: string | null; status: string; quality: number | null } | null;

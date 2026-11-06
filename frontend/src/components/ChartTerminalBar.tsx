@@ -192,6 +192,9 @@ export function ChartTerminalBar(p: Props) {
         <button className={chip(!!prefs.showIpo)} onClick={() => set({ showIpo: !prefs.showIpo })} title={p.dailyOnlyNote ? "The IPO base is detected on daily candles: switch to 1D to see it" : "IPO base of the latest daily scan: listing date, price discovery, base, pivot, breakout"} data-testid="toggle-ipo">
           IPO base
         </button>
+        <button className={chip(!!prefs.showMultiYear)} onClick={() => set({ showMultiYear: !prefs.showMultiYear })} title="Multi-year breakouts of the stock's history: the resistance line from the base start and the breakout candle (daily detector; shown on 1D and longer timeframes)" data-testid="toggle-multiyear">
+          Multi-year
+        </button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <div className="flex gap-1" role="group" aria-label="Drawing tools">

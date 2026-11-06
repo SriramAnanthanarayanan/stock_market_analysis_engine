@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Candle, IndicatorPayload, RSLinePayload, StageDetail, TechnicalPayload } from "../api/types";
 import type { OverlayShape } from "./OverlayPrimitive";
-import { ipoApi, vcpApi, type IpoRow, type VcpSymbol } from "../api/advanced";
-import { ipoMarkers, ipoShapes, ipoVolume, vcpMarkers, vcpShapes, vcpVolume } from "./vcpOverlay";
+import { ipoApi, multiYearApi, vcpApi, type IpoRow, type MultiYearEvent, type VcpSymbol } from "../api/advanced";
+import { ipoMarkers, ipoShapes, ipoVolume, multiYearMarkers, multiYearShapes, vcpMarkers, vcpShapes, vcpVolume } from "./vcpOverlay";
 import { loadLayout, loadPrefs, newId, saveLayout, savePrefs, type ChartPrefs } from "../lib/prefs";
 import { drawingsApi } from "../api/advanced";
 import { useDrawingStore } from "../lib/drawingStore";
@@ -49,6 +49,7 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
         showStage: p.showStage || s.has("stage"),
         showVcp: p.showVcp || s.has("vcp"),
         showIpo: p.showIpo || s.has("ipo"),
+        showMultiYear: p.showMultiYear || s.has("multiyear"),
         emas: s.has("ema") ? p.emas.map((e) => ({ ...e, visible: e.visible || [20, 50, 200].includes(e.period) })) : p.emas,
       };
       return next;
@@ -214,6 +215,28 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     return { shapes: ipoShapes(g), markers: ipoMarkers(g), volume: ipoVolume(g) };
   }, [ipo, prefs.showIpo]);
 
+  // ---- multi-year breakouts of the stock's history (daily detector; drawn on 1D and longer timeframes)
+  const [multiYear, setMultiYear] = useState<MultiYearEvent[] | null>(null);
+  const myTimeframeOk = !!src && src.timeframe !== "1h" && src.timeframe !== "4h";
+  useEffect(() => {
+    if (!src || instrument !== "stock" || !prefs.showMultiYear || !myTimeframeOk) {
+      setMultiYear(null);
+      return;
+    }
+    let cancelled = false;
+    multiYearApi
+      .symbol(src.symbol, src.asof)
+      .then((r) => !cancelled && setMultiYear(r.events))
+      .catch(() => !cancelled && setMultiYear(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [src?.symbol, src?.asof, instrument, prefs.showMultiYear, myTimeframeOk]);
+  const multiYearOverlay = useMemo(() => {
+    if (!multiYear || !prefs.showMultiYear) return { shapes: [] as OverlayShape[], markers: [] as ChartMarker[] };
+    return { shapes: multiYearShapes(multiYear), markers: multiYearMarkers(multiYear) };
+  }, [multiYear, prefs.showMultiYear]);
+
   const handle = useRef<ChartHandle | null>(null);
   const onReady = useCallback((h: ChartHandle | null) => {
     handle.current = h;
@@ -287,6 +310,8 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
     vcpOverlay,
     ipo,
     ipoOverlay,
+    multiYear,
+    multiYearOverlay,
     extraPanes,
     stageOverlay,
     onReady,

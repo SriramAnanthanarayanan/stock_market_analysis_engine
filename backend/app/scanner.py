@@ -242,6 +242,13 @@ class ScanManager:
         # Sector strength (weekly): each sector index's RRG position vs the RRG benchmark, computed
         # once per scan from the stored official index history (no downloads).
         sector_cache: dict[str, Any] = {}
+        # Multi-year breakouts (daily): forward returns of past events vs the official benchmark index.
+        my_bench = None
+        if req.timeframe == "1d":
+            try:
+                my_bench = s.indices.frame(s.signal_cfg.multiyear_benchmark, "1d", cutoff)["close"]
+            except Exception as exc:
+                log.warning("scan %s: multi-year benchmark %s unavailable: %s", scan_id, s.signal_cfg.multiyear_benchmark, exc)
         processed = ok = failed = n_det = 0
         for st in stocks:
             status, err, bars, last_ts, note = "ok", None, 0, None, None
@@ -274,7 +281,7 @@ class ScanManager:
                             log.exception("scan %s: technical analysis for %s failed", scan_id, st.symbol)
                             note = ((note + "; ") if note else "") + f"technical analysis failed: {type(texc).__name__}: {texc}"[:300]
                         try:
-                            self._store_signals(scan_id, st, req.timeframe, ps.frame, dets, tech, stage_res, rrg_bench, sector_cache, cutoff)
+                            self._store_signals(scan_id, st, req.timeframe, ps.frame, dets, tech, stage_res, rrg_bench, sector_cache, cutoff, my_bench)
                         except Exception as sexc:  # advanced scanners never fail the pattern scan
                             log.exception("scan %s: signal evidence for %s failed", scan_id, st.symbol)
                             note = ((note + "; ") if note else "") + f"signal scanners failed: {type(sexc).__name__}: {sexc}"[:300]
@@ -403,7 +410,7 @@ class ScanManager:
                 conn.execute(db.tech_signals.insert(), rows)
         return res
 
-    def _store_signals(self, scan_id: str, st: StockInfo, timeframe: str, frame, dets: list[Detection], tech, stage_res, rrg_bench, sector_cache: dict[str, Any] | None = None, cutoff=None) -> int:
+    def _store_signals(self, scan_id: str, st: StockInfo, timeframe: str, frame, dets: list[Detection], tech, stage_res, rrg_bench, sector_cache: dict[str, Any] | None = None, cutoff=None, my_bench=None) -> int:
         """Advanced scanners (fresh breakouts, 52-week, Volume Shocker, VCP) and the
         normalized evidence of every scanner of this scan (docs/confluence-engine.md).
         Existing results (patterns, Marubozu, EMA alignment, Stage, RS) are re-labelled,
@@ -430,12 +437,13 @@ class ScanManager:
         ser = tech.series if tech is not None and tech.series else indicator_series(frame, s.tech_cfg, cache_key=("stock", st.symbol, timeframe, s.store.price_basis))
         scfg = s.signal_cfg
         sv, sh = scfg.version, config_hash(scfg)
-        outs = run_signals(frame, timeframe, ser["atr"], ser["ema"].get(20), ser["ema"].get(50), scfg, st.symbol)
+        outs = run_signals(frame, timeframe, ser["atr"], ser["ema"].get(20), ser["ema"].get(50), scfg, st.symbol, my_bench)
         if timeframe == "1d":
             pub.fresh_breakouts(outs.fresh_events, outs.fresh_touches, sv, sh)
             pub.breakout_setups(outs.setups, sv, sh)
             self._store_ipo(st, frame, pub)
             pub.week52(outs.w52_events, outs.w52_touches, outs.w52_state, sv, sh)
+            pub.multiyear(outs.multiyear, scfg.multiyear_store_sessions, sv, sh)
             self._store_vcp(scan_id, st, frame, ser, pub)
         pub.volume_shocks(outs.shocks, sv, sh)
         pub.volume_state(outs.volume_state, sv, sh)

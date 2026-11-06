@@ -1,4 +1,4 @@
-import type { IpoGeometry, VcpGeometry } from "../api/advanced";
+import type { IpoGeometry, MultiYearEvent, VcpGeometry } from "../api/advanced";
 import type { OverlayShape } from "./OverlayPrimitive";
 import type { ChartMarker, VolumeHighlight } from "./PatternChart";
 
@@ -95,4 +95,20 @@ export function ipoMarkers(g: IpoGeometry): ChartMarker[] {
 
 export function ipoVolume(g: IpoGeometry): VolumeHighlight[] {
   return g.breakout ? [{ t0: g.breakout.t, t1: g.breakout.t, color: VCP_COLORS.breakoutVolume }] : [];
+}
+
+// ---------------------------------------------------------------- multi-year breakouts
+export const MULTIYEAR_COLORS = { level: "#F5C542", holding: "#95EB45", failed: "#8B9BA5" };
+
+/** Resistance line of each multi-year breakout: from the base start to the breakout candle. */
+export function multiYearShapes(events: MultiYearEvent[], minYears = 0): OverlayShape[] {
+  return events
+    .filter((e) => e.base_years >= minYears)
+    .map((e) => ({ kind: "segment" as const, t0: e.base_start_t, t1: e.t, p0: e.level, p1: e.level, color: MULTIYEAR_COLORS.level, dashed: true, width: 2, label: `${e.base_years.toFixed(1)}-yr resistance ${e.level.toFixed(2)}` }));
+}
+
+export function multiYearMarkers(events: MultiYearEvent[], minYears = 0): ChartMarker[] {
+  return events
+    .filter((e) => e.base_years >= minYears)
+    .map((e) => ({ t: e.t, position: "below" as const, shape: "arrowUp" as const, color: e.status === "failed" ? MULTIYEAR_COLORS.failed : MULTIYEAR_COLORS.holding, text: `${e.base_years.toFixed(1)}Y BO${e.rebreak ? " (re-break)" : ""}${e.status === "failed" ? " failed" : ""}` }));
 }

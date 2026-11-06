@@ -17,6 +17,7 @@ import { Week52Scanner } from "./pages/Week52Scanner";
 import { History } from "./pages/History";
 import { IndexAnalysis } from "./pages/IndexAnalysis";
 import { IndexExplorer } from "./pages/IndexExplorer";
+import { MultiYearBreakouts } from "./pages/MultiYearBreakouts";
 import { IndicatorScanner } from "./pages/IndicatorScanner";
 import { RRG } from "./pages/RRG";
 import { StageAnalysis } from "./pages/StageAnalysis";
@@ -28,6 +29,7 @@ const NAV: { to: string; label: string; testid: string; end?: boolean; group?: s
   { to: "/fresh-breakouts", label: "Fresh Breakouts", testid: "nav-fresh-breakouts" },
   { to: "/about-to-breakout", label: "About to Break Out", testid: "nav-setups" },
   { to: "/52-week", label: "52-Week Breakouts", testid: "nav-52week" },
+  { to: "/multi-year", label: "Multi-Year Breakouts", testid: "nav-multiyear" },
   { to: "/volume-shocker", label: "Volume Shocker", testid: "nav-volume" },
   { to: "/vcp", label: "VCP Scanner", testid: "nav-vcp" },
   { to: "/ipo-base", label: "IPO Base Breakout", testid: "nav-ipo" },
@@ -78,6 +80,7 @@ export default function App() {
             <Route path="/breakouts" element={<BreakoutScanner />} />
             <Route path="/fresh-breakouts" element={<FreshBreakoutScanner />} />
             <Route path="/52-week" element={<Week52Scanner />} />
+            <Route path="/multi-year" element={<MultiYearBreakouts />} />
             <Route path="/volume-shocker" element={<VolumeShocker />} />
             <Route path="/vcp" element={<VcpScanner />} />
             <Route path="/ipo-base" element={<IpoBaseScanner />} />
