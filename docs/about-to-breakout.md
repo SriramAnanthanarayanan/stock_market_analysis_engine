@@ -42,11 +42,14 @@ An Approaching / Very Near / Touched state is trigger evidence in the **same fam
 
 ## API
 
+A daily scan run with SignalConfig 1.0.0 (before this feature) has no setup states: the page then says so and asks for a new 1D scan (after an upgrade the scheduler starts one automatically because the signal configuration hash changed).
+
+
 `GET /api/scan/breakout-setups?universe=&asof=&direction=bullish|bearish|both&state=&include_rejected=&include_expired=&min_quality=&fno=` - rows of the latest daily scan (stored evidence), with Stage context from the latest weekly scan, the setup quality breakdown and the thresholds.
 
 ## Tests
 
-`tests/test_breakout_setups.py` (12): Approaching and the two distances, Very Near and Touched, rejected intraday push, Breakout and Confirmed Breakout, a breakout that closes back inside is Rejected, Expired, far from the level is no setup, "either" rule and configurable thresholds, bearish mirror, no look-ahead, explainable setup quality, scanner API. Self-test: "10-day Very Near". UI: `scripts/verify-improvements.mjs`.
+`tests/test_breakout_setups.py` (13): Approaching and the two distances, Very Near and Touched, rejected intraday push, Breakout and Confirmed Breakout, a breakout that closes back inside is Rejected, Expired, far from the level is no setup, "either" rule and configurable thresholds, bearish mirror, no look-ahead, explainable setup quality, scanner API, a scan from before the feature is explained instead of shown as an empty market. Self-test: "10-day Very Near". UI: `scripts/verify-improvements.mjs`.
 
 ## Limitations
 

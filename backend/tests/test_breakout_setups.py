@@ -152,3 +152,24 @@ def test_setups_api(adv):
     # the event scanner is unchanged: states never appear as breakout events
     fb = client.get("/api/scan/fresh-breakouts", params={"max_age": 60}).json()["items"]
     assert all(not i.get("kind", "").startswith("breakout_setup_") for i in fb)
+
+
+def test_setups_explain_a_scan_from_before_the_feature(adv):
+    """Right after an upgrade the latest scan (SignalConfig 1.0.0) has no setup states:
+    the page says so instead of reporting an empty market."""
+    from sqlalchemy import update
+
+    from app import database as db
+
+    client = adv
+    s = client.app.state.services
+    sid = client.get("/api/scan/breakout-setups").json()["scan"]["scan_id"]
+    with s.engine.begin() as conn:
+        conn.execute(update(db.scans).where(db.scans.c.scan_id == sid).values(signal_config_version="1.0.0"))
+    try:
+        r = client.get("/api/scan/breakout-setups").json()
+        assert r["count"] == 0 and "before the About to Break Out states existed" in r["note"]
+    finally:
+        with s.engine.begin() as conn:
+            conn.execute(update(db.scans).where(db.scans.c.scan_id == sid).values(signal_config_version=s.signal_cfg.version))
+    assert client.get("/api/scan/breakout-setups").json()["count"] > 0

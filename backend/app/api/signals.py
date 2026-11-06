@@ -71,6 +71,16 @@ def has_signals(scan: dict[str, Any] | None) -> bool:
     return bool(scan and scan.get("signal_config_hash"))
 
 
+SETUPS_SINCE = (1, 1, 0)  # SignalConfig version that added the about-to-break-out states
+
+
+def _version(v: str | None) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except ValueError:
+        return (0,)
+
+
 def evidence_rows(s: Services, scan_id: str, universe: str = "all", sources: tuple[str, ...] | None = None, extra=None, symbol: str | None = None) -> list[dict[str, Any]]:
     t = db.signal_evidence
     q = select(t).where(t.c.scan_id == scan_id)
@@ -208,6 +218,8 @@ def scan_breakout_setups(
         return _empty(None, NO_SCAN)
     if not has_signals(scan):
         return _empty(scan, NO_SIGNALS)
+    if _version(scan.get("signal_config_version")) < SETUPS_SINCE:
+        return _empty(scan, f"The latest daily scan was run with signal config {scan.get('signal_config_version')}, before the About to Break Out states existed. A new 1D scan computes them (after an upgrade the scheduler starts one automatically); refresh this page when it has finished.")
     wanted = set(state.split(",")) if state else {"approaching", "very_near", "touched", "breakout", "confirmed_breakout"} | ({"rejected"} if include_rejected else set()) | ({"expired"} if include_expired else set())
     unknown = wanted - set(SETUP_LABELS)
     if unknown:

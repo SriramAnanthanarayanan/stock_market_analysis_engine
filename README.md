@@ -312,7 +312,7 @@ curl.exe http://127.0.0.1:8031/api/evaluation/runs
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m app.selftest        # 120 checks: engine formulas, 4 cases x 17 patterns, Forming, precedence, S/R, regressions, E1 indicator references, A1-A5 checks
-.\.venv\Scripts\python.exe -m pytest              # 547 tests, offline (fixture provider)
+.\.venv\Scripts\python.exe -m pytest              # 548 tests, offline (fixture provider)
 
 cd ..\frontend
 npm run build                                     # strict TypeScript check + production bundle

@@ -97,7 +97,7 @@ What the first start of a fresh clone does:
 | DB schema | 9. Migration 9 added IPO config columns on `scans`, `stocks.listing_date` / `listing_date_source`, `chart_drawings.owner` (default `local`) / `created_timeframe`, VCP v2 contraction metrics. Migration 8 added `signal_evidence`, `vcp_formations`, `vcp_contractions`, `confluence_runs`, `confluence_snapshots`, `chart_drawings`, `chart_drawing_history`, `drawing_templates`, `nse_52w_reference` and signal/VCP config columns on `scans`. |
 | Data depth | Stocks 1D/1W: full Yahoo history (from 1996 or listing). 1H: Yahoo's ~730-day cap, and the local cache keeps growing. NSE indices: back to their start (NIFTY 50 from 1990). |
 | Charts | Send the whole history. Open on the latest bars or the selected formation. **Fit** shows everything; **Log** switches to a log price scale. |
-| Tests | pytest 547, `python -m app.selftest` 120, `npm test` 13 (Fibonacci maths, line data), verify-advanced 53 (+3 with `--after-restart`), verify-improvements 40 (+4 with `--after-restart`). Older UI suites need the live DB (see "How to verify"). |
+| Tests | pytest 548, `python -m app.selftest` 120, `npm test` 13 (Fibonacci maths, line data), verify-advanced 53 (+3 with `--after-restart`), verify-improvements 40 (+4 with `--after-restart`). Older UI suites need the live DB (see "How to verify"). |
 | Live 1D scan | 500 of 502 symbols, 334 detections (before A1-A4). BAGMANE and DUMMYHEG have no Yahoo data; that is expected. The first live scan after A1-A4 adds evidence, VCPs and the confluence snapshot without re-downloading history. |
 
 ## Hard rules: do not break
