@@ -27,6 +27,7 @@ export const UNIVERSES: { value: Universe; label: string }[] = [
   { value: "nifty500", label: "NIFTY 500" },
   { value: "fno", label: "F&O" },
   { value: "non_fno", label: "Non-F&O" },
+  { value: "ipo", label: "Recent IPOs" },
   { value: "all", label: "All" },
 ];
 

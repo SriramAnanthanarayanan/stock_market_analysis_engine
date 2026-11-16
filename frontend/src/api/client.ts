@@ -27,6 +27,7 @@ import type {
   PatternInfo,
   RefreshResponse,
   ScanResponse,
+  ScanActivityResponse,
   ScanSummary,
   SweepResult,
   Timeframe,
@@ -101,6 +102,7 @@ export const api = {
   config: () => request<{ version: string; hash: string; parameters: ConfigParam[] }>("/api/config"),
   scan: (q: ScanQuery) => request<ScanResponse>(`/api/scan${qs({ ...q })}`),
   scanStatus: (id: string) => request<ScanSummary>(`/api/scan/status/${encodeURIComponent(id)}`),
+  scanActive: () => request<ScanActivityResponse>("/api/scan/active"),
   refresh: (body: { universe: Universe; timeframe: Timeframe; asof?: string | null; patterns?: string[] | null; full_refresh?: boolean }) =>
     request<RefreshResponse>("/api/scan/refresh", post(body)),
   overview: (universe: Universe, asof?: string | null) => request<OverviewResponse>(`/api/overview${qs({ universe, asof })}`),

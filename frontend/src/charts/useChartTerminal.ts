@@ -189,7 +189,7 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
   }, [src?.symbol, src?.timeframe, src?.asof, instrument, prefs.showVcp]);
   const vcpOverlay = useMemo(() => {
     const g = vcp?.vcp?.geometry;
-    if (!g || !prefs.showVcp || !g.schema_version?.startsWith("vcp-2")) return { shapes: [] as OverlayShape[], markers: [] as ChartMarker[], volume: [] as VolumeHighlight[] };
+    if (!g || !prefs.showVcp || !/^vcp-[23]\./.test(g.schema_version ?? "")) return { shapes: [] as OverlayShape[], markers: [] as ChartMarker[], volume: [] as VolumeHighlight[] };
     return { shapes: vcpShapes(g, vcp?.vcp?.last_close), markers: vcpMarkers(g), volume: vcpVolume(g) };
   }, [vcp, prefs.showVcp]);
 

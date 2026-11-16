@@ -27,7 +27,7 @@ from .signals import scan_summary, universe_clause
 
 router = APIRouter(prefix="/api")
 
-DEFAULT_STATUSES = ("near_pivot", "final_contraction", "breakout", "forming", "failed_breakout")
+DEFAULT_STATUSES = ("near_pivot", "final_contraction", "breakout", "forming", "extended", "failed_breakout")
 STAGE_FILTERS = Literal["all", "stage2", "stage2_or_stage1", "exclude_other"]
 
 
@@ -52,6 +52,9 @@ def vcp_row(r: Any) -> dict[str, Any]:
     m = d.get("metrics") or {}
     d["pivot_crossed_low_volume"] = bool(m.get("pivot_crossed_low_volume"))
     d["breakout_confirmation"] = m.get("breakout_confirmation")
+    d["extended"] = bool(m.get("extended"))  # VCPConfig 3.0.0
+    d["shape"] = m.get("shape")  # None for rows stored before 3.0.0
+    d["shape_label"] = m.get("shape_label")
     return d
 
 
@@ -111,7 +114,7 @@ def scan_vcp(
     excl = set(x for x in (exclude_stages or "").split(",") if x)
     t = db.vcp_formations
     q = select(t).where(t.c.scan_id == scan["scan_id"]).where(t.c.status.in_(sorted(wanted))).where(t.c.quality >= min_quality)
-    uc = universe_clause(t, universe)
+    uc = universe_clause(t, universe, s.engine)
     if uc is not None:
         q = q.where(uc)
     with s.engine.connect() as conn:
@@ -129,7 +132,7 @@ def scan_vcp(
             continue
         r.pop("geometry", None)  # chart payload: /api/vcp/symbol
         items.append(r)
-    rank = {k: i for i, k in enumerate(("breakout", "near_pivot", "final_contraction", "forming", "failed_breakout", "developing", "invalidated"))}
+    rank = {k: i for i, k in enumerate(("breakout", "near_pivot", "final_contraction", "forming", "extended", "failed_breakout", "developing", "invalidated"))}
     items.sort(key=lambda r: (rank.get(r["status"], 99), -r["quality"]))
     return {
         "scan": scan_summary(scan),

@@ -186,6 +186,8 @@ def _setup(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig) -> tuple[b
             listed.append(Item(v["evidence_id"], "vcp", f"VCP {m.get('status_label', st)}", 0.0, "vcp", status="invalidated"))
         elif st == "developing":
             listed.append(Item(v["evidence_id"], "vcp", "VCP developing (one contraction)", 0.0, "vcp", status="overlapping", note="not a setup yet"))
+        elif st == "extended":
+            listed.append(Item(v["evidence_id"], "vcp", f"VCP {m.get('status_label', st)}", 0.0, "vcp", status="overlapping", note="above the pivot beyond the buy zone without a volume breakout: no longer a setup"))
         else:
             f = cfg.forming_factor if st == "forming" else 0.8 if _m(v).get("pivot_crossed_low_volume") else 1.0
             items.append(Item(v["evidence_id"], "vcp", f"VCP {m.get('status_label', st)} (quality {v.get('quality'):.0f})", q * f, "vcp", time=m.get("base_end")))
@@ -195,8 +197,10 @@ def _setup(ev: SymbolEvidence, direction: str, cfg: ConfluenceConfig) -> tuple[b
         lab = f"IPO base {_m(ip).get('status_label', st)} (quality {ip.get('quality') or 0:.0f})"
         if direction != "bullish":
             listed.append(Item(ip["evidence_id"], "ipo_base", lab, 0.0, "ipo_base", status="overlapping", note="bullish structure: not counted for bearish"))
-        elif st in ("invalidated", "failed_breakout"):
+        elif st in ("invalidated", "failed_breakout", "ipo_low_broken"):
             listed.append(Item(ip["evidence_id"], "ipo_base", lab, 0.0, "ipo_base", status="invalidated"))
+        elif st == "cheat_entry":
+            listed.append(Item(ip["evidence_id"], "ipo_base", lab, 0.0, "ipo_base", status="overlapping", note="early (cheat) entry inside the base: listed, not scored (ConfluenceConfig unchanged)"))
         elif st in cfg.ipo_state_scores:
             items.append(Item(ip["evidence_id"], "ipo_base", lab, (ip.get("quality") or 0.0) / 100.0 * cfg.ipo_state_scores[st], "ipo_base", time=(_m(ip).get("base") or {}).get("end")))
         else:

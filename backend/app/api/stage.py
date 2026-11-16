@@ -13,7 +13,7 @@ from sqlalchemy import select
 from .. import database as db
 from ..config import STAGE_ASSUMPTION_PARAMS, STAGE_PARAM_META, config_hash, describe_config
 from ..models import Universe
-from ..scanner import find_latest_scan
+from ..scanner import find_latest_scan, ipo_clause
 from ..services import Services
 from ..stage.analysis import STAGE_LABELS
 from ..stage.rs_line import align_benchmark, compute_rs_line, latest_state, rs_length_for
@@ -104,6 +104,8 @@ def stage_list(
             q = q.where(t.c.fno_status == "YES")
         elif universe == "non_fno":
             q = q.where((t.c.in_nifty500 == 1) & (t.c.fno_status == "NO"))
+        elif universe == "ipo":
+            q = q.where(ipo_clause(t, s.engine))
         with s.engine.connect() as conn:
             raw = conn.execute(q).mappings().all()
         rows = [
@@ -177,7 +179,7 @@ def stage_symbol(
             if ss.stage[i] != ss.stage[i - 1]:
                 hist.append({"week": iso(ss.times[i]), "t": epoch_s(ss.times[i]), "from": str(ss.stage[i - 1]), "to": str(ss.stage[i])})
         last = n - 1
-        lo = max(0, last - s.stage_cfg.base_lookback_weeks)
+        lo = max(0, int(ss.base_start[last])) if s.stage_cfg.base_mode == "variable" and len(ss.base_start) > last else max(0, last - s.stage_cfg.base_lookback_weeks)
         out["overlay"] = {
             "times": times,
             "ema30": [_num(x, 4) for x in ss.ema30[first:]],

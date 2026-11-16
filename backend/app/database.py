@@ -728,6 +728,171 @@ ADVANCED_TABLES = [
     nse_52w_reference,
 ]
 
+# ---------------------------------------------------------------- F&O OI activity
+# NSE F&O / equity / index bhavcopy data (official end-of-day files, unadjusted
+# prices) and the user's F&O buildup selection (app/fno, docs/fno-activity.md).
+# A separate dataset: never mixed with the provider candles of the scanners.
+fno_sessions = Table(
+    "fno_sessions",
+    metadata,
+    Column("trade_date", String, primary_key=True),
+    Column("fo_status", String, nullable=False),  # ok / missing / error
+    Column("fo_source", String),  # udiff / legacy
+    Column("fo_rows", Integer),
+    Column("futures_rows", Integer),
+    Column("option_symbols", Integer),
+    Column("eq_status", String),
+    Column("eq_rows", Integer),
+    Column("idx_status", String),
+    Column("idx_rows", Integer),
+    Column("summary_config_hash", String),
+    Column("error", Text),
+    Column("updated_at", String, nullable=False),
+)
+
+fno_futures = Table(
+    "fno_futures",
+    metadata,
+    Column("trade_date", String, nullable=False),
+    Column("row_no", Integer, nullable=False),  # order of the futures rows in the file
+    Column("instrument", String, nullable=False),
+    Column("symbol", String, nullable=False),
+    Column("expiry_label", String),  # DD-Mon-YYYY as the selection rule reads it
+    Column("expiry", String),  # ISO date
+    Column("open", Float),
+    Column("high", Float),
+    Column("low", Float),
+    Column("close", Float),
+    Column("settle", Float),
+    Column("contracts", Float),
+    Column("value_lakh", Float),
+    Column("open_int", Float),
+    Column("chg_oi", Float),
+    Column("underlying", Float),
+    Column("lot_size", Float),
+    PrimaryKeyConstraint("trade_date", "row_no"),
+    Index("ix_fno_futures_symbol", "symbol", "trade_date"),
+)
+
+fno_underlying = Table(
+    "fno_underlying",
+    metadata,
+    Column("symbol", String, nullable=False),
+    Column("trade_date", String, nullable=False),
+    Column("kind", String, nullable=False),  # stock / index
+    Column("source_name", String),
+    Column("open", Float),
+    Column("high", Float),
+    Column("low", Float),
+    Column("close", Float),
+    Column("prev_close", Float),
+    Column("volume", Float),
+    Column("turnover_lacs", Float),
+    Column("trades", Float),
+    Column("deliv_qty", Float),
+    Column("deliv_per", Float),
+    PrimaryKeyConstraint("symbol", "trade_date"),
+    Index("ix_fno_underlying_date", "trade_date"),
+)
+
+fno_option_summary = Table(
+    "fno_option_summary",
+    metadata,
+    Column("symbol", String, nullable=False),
+    Column("trade_date", String, nullable=False),
+    Column("instrument", String),
+    Column("expiry", String),
+    Column("call_oi", Float),
+    Column("put_oi", Float),
+    Column("pcr", Float),
+    Column("max_call_strike", Float),
+    Column("max_call_oi", Float),
+    Column("max_put_strike", Float),
+    Column("max_put_oi", Float),
+    Column("spot", Float),
+    Column("iv_expiry", String),
+    Column("iv_days", Integer),
+    Column("atm_strike", Float),
+    Column("atm_iv", Float),
+    Column("config_hash", String),
+    PrimaryKeyConstraint("symbol", "trade_date"),
+    Index("ix_fno_option_summary_date", "trade_date"),
+)
+
+fno_runs = Table(
+    "fno_runs",
+    metadata,
+    Column("trade_date", String, nullable=False),
+    Column("config_hash", String, nullable=False),
+    Column("config_version", String, nullable=False),
+    Column("prev_date", String),
+    Column("latest_front_expiry", String),
+    Column("prev_front_expiry", String),
+    Column("signals", Integer, nullable=False),
+    Column("notices_json", Text),
+    Column("created_at", String, nullable=False),
+    PrimaryKeyConstraint("trade_date", "config_hash"),
+)
+
+fno_signals = Table(
+    "fno_signals",
+    metadata,
+    Column("trade_date", String, nullable=False),
+    Column("config_hash", String, nullable=False),
+    Column("rank", Integer, nullable=False),
+    Column("symbol", String, nullable=False),
+    Column("instrument", String, nullable=False),
+    Column("expiry_label", String),
+    Column("close_today", Float),
+    Column("oi_today", Float),
+    Column("close_prev", Float),
+    Column("oi_prev", Float),
+    Column("price_change_pct", Float),
+    Column("oi_change_pct", Float),
+    Column("signal", String, nullable=False),
+    Column("priority", Integer),
+    Column("enrichment_json", Text),
+    Column("flags_json", Text),
+    PrimaryKeyConstraint("trade_date", "config_hash", "rank"),
+)
+
+fno_watchlist = Table(
+    "fno_watchlist",
+    metadata,
+    Column("symbol", String, primary_key=True),
+    Column("added_at", String, nullable=False),
+)
+
+FNO_TABLES = [fno_sessions, fno_futures, fno_underlying, fno_option_summary, fno_runs, fno_signals, fno_watchlist]
+
+# Recent-IPO universe (migration 11): NSE's past public issues (mainboard + SME IPOs)
+# joined with the NSE equity list. ``mainboard`` = the symbol trades on the NSE
+# main board now (EQ / BE series) and its equity-list listing date is not before
+# the IPO listing (excludes FPOs / re-issues of old listings).
+ipo_listings = Table(
+    "ipo_listings",
+    metadata,
+    Column("symbol", String, primary_key=True),
+    Column("listing_date", String, primary_key=True),  # IPO listing date (NSE past issues)
+    Column("company", String),
+    Column("security_type", String, nullable=False),  # Equity (mainboard IPO) / SME
+    Column("issue_price", Float),
+    Column("price_range", String),
+    Column("issue_start", String),
+    Column("issue_end", String),
+    Column("equity_series", String),  # series in the NSE equity list now (EQ / BE / BZ); NULL = not on the main board
+    Column("equity_list_date", String),  # DATE OF LISTING in the NSE equity list
+    Column("mainboard", Integer, nullable=False, default=0),
+    Column("source", String, nullable=False),
+    Column("fetched_at", String, nullable=False),
+    # migration 12: product of the provider's split / bonus ratios after the IPO
+    # listing (NULL = not checked / provider could not tell)
+    Column("split_factor", Float),
+    Column("splits_checked_at", String),
+)
+
+IPO_TABLES = [ipo_listings]
+
 
 def _migration_1(conn: Connection) -> None:
     metadata.create_all(conn, tables=V1_TABLES, checkfirst=True)
@@ -830,6 +995,26 @@ def _migration_9(conn: Connection) -> None:
     conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_chart_drawings_owner ON chart_drawings (owner, instrument, symbol)")
 
 
+def _migration_10(conn: Connection) -> None:
+    """F&O OI activity: NSE bhavcopy sessions, futures, underlying (spot +
+    delivery), option summaries, daily selection runs / signals, watchlist.
+    New tables only; nothing existing is touched."""
+    metadata.create_all(conn, tables=FNO_TABLES, checkfirst=True)
+
+
+def _migration_11(conn: Connection) -> None:
+    """Recent-IPO universe: NSE past public issues (issue price, IPO listing date,
+    mainboard / SME). New table only; nothing existing is touched."""
+    metadata.create_all(conn, tables=IPO_TABLES, checkfirst=True)
+
+
+def _migration_12(conn: Connection) -> None:
+    """Split / bonus factor since the IPO listing (issue price on the split-adjusted
+    basis of the OHLC history). New nullable columns only."""
+    _add_column(conn, "ipo_listings", "split_factor", "FLOAT")
+    _add_column(conn, "ipo_listings", "splits_checked_at")
+
+
 # Append-only. Never edit a released migration; add a new one instead.
 MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (1, "initial schema: universe, market data metadata, scans, detections, geometry, lifecycle", _migration_1),
@@ -841,6 +1026,9 @@ MIGRATIONS: list[tuple[int, str, Callable[[Connection], None]]] = [
     (7, "market_data.history_period: history depth of each cache (full-history backfill)", _migration_7),
     (8, "signal evidence, VCP, confluence snapshots, chart drawings, NSE 52-week reference; scans signal/VCP config", _migration_8),
     (9, "IPO base config on scans, stock listing dates, drawings by user + creating timeframe, VCP v2 contraction metrics", _migration_9),
+    (10, "F&O OI activity: NSE bhavcopy sessions, futures, underlying + delivery, option summaries, selection runs, watchlist", _migration_10),
+    (11, "recent-IPO universe: NSE past public issues (issue price, IPO listing date, mainboard / SME)", _migration_11),
+    (12, "ipo_listings.split_factor / splits_checked_at: split / bonus factor since the IPO listing", _migration_12),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

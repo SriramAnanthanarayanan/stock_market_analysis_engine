@@ -27,6 +27,21 @@ Bullish (bearish mirrors it with ref_low, lows and ``<``):
   inside that window), so "the previous close was not already above the same
   level" is implied.
 
+**Base requirement** (``base_required``; SignalConfig 1.3.0, the 10-day scanner only):
+the reference window ``i-N .. i-1`` must be a base, not a trend leg - its range
+``ref_high - ref_low <= base_max_range_atr x ATR(14)[i-1]``, sideways (net close
+change from the window's first to its last candle <= ``base_max_drift_atr x ATR``)
+and its top (bottom
+for breakdowns) zone - within ``base_touch_zone_atr x ATR`` of the level - first
+reached at least ``base_min_level_age`` sessions before ``i`` (the top held; a
+later poke a little higher is a test of the same top, not a new level). In a
+trend the "10-day high" is usually just the previous candle's high, which is not
+a level. A fresh crossing and an approach state need a valid base. The candles
+reaching the top zone (within ``base_touch_zone_atr x ATR``) and the sessions
+between the first and the last of them are reported (information; the 3-touch
+score is planned with the shared level engine). ATR of the candle before ``i``
+keeps the base judged on the window alone.
+
 Events (de-duplication, spec 3.5) - a deterministic walk over the candles:
 
 * ``armed`` -> a fresh crossing creates an **event** (stable event ID) and opens
@@ -64,6 +79,11 @@ class CrossingParams:
     require_prior_level_clear: bool
     rearm_closes: int
     rearm_on_new_range: bool
+    base_required: bool = False
+    base_max_range_atr: float = 3.5
+    base_touch_zone_atr: float = 0.5
+    base_min_level_age: int = 3
+    base_max_drift_atr: float = 2.0
 
 
 @dataclass
@@ -91,6 +111,12 @@ class CrossingSeries:
     first: int | None
     episodes: list[Episode] = field(default_factory=list)
     blocked_until: int | None = None  # first candle armed after a blocked start
+    base_ok: np.ndarray | None = None  # reference window i-N..i-1 is a valid base (all True when not required)
+    base_touches: np.ndarray | None = None  # candles of the window that reached the level zone
+    base_touch_span: np.ndarray | None = None  # sessions between the first and the last of them
+    base_level_age: np.ndarray | None = None  # sessions since the first candle that reached the top zone
+    base_drift_atr: np.ndarray | None = None  # |last close - first close| of the window / ATR(14)[i-1]
+    base_range_atr: np.ndarray | None = None  # window range / ATR(14) of the candle before
 
     def event_indices(self) -> list[int]:
         return [e.event for e in self.episodes]
@@ -115,6 +141,51 @@ def _first_run_end(mask: np.ndarray, k: int) -> int | None:
 def _next_index(sorted_idx: np.ndarray, at_least: int) -> int | None:
     j = int(np.searchsorted(sorted_idx, at_least, side="left"))
     return int(sorted_idx[j]) if j < len(sorted_idx) else None
+
+
+def base_quality(high, low, atr, level, n: int, direction: str, zone_atr: float, close=None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """(range of window i-n..i-1 in ATR(14)[i-1] units, candles of the window whose high
+    (low for the bearish side) is within ``zone_atr x ATR[i-1]`` of the level, sessions
+    between the first and the last of them, sessions since the first candle that reached the
+    zone, |last close - first close| of the window in ATR units).
+    Vectorised over every candle; completed candles before i only."""
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    h = np.asarray(high, dtype=float)
+    l = np.asarray(low, dtype=float)
+    a = np.asarray(atr, dtype=float)
+    m = len(h)
+    rng = np.full(m, np.nan)
+    tests = np.zeros(m, dtype=int)
+    span = np.zeros(m, dtype=int)
+    age = np.zeros(m, dtype=int)
+    drift = np.full(m, np.nan)
+    if m <= n:
+        return rng, tests, span, age, drift
+    prev_atr = np.concatenate(([np.nan], a[:-1]))
+    ext = h if direction == "bullish" else l
+    win = sliding_window_view(ext, n)[: m - n]  # window for candle i = n .. m-1
+    hw = sliding_window_view(h, n)[: m - n]
+    lw = sliding_window_view(l, n)[: m - n]
+    lvl = np.asarray(level, dtype=float)[n:]
+    z = zone_atr * prev_atr[n:]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rng[n:] = (hw.max(axis=1) - lw.min(axis=1)) / prev_atr[n:]
+        inzone = (win >= (lvl - z)[:, None]) if direction == "bullish" else (win <= (lvl + z)[:, None])
+    ok = np.isfinite(z)
+    cnt = inzone.sum(axis=1)
+    first = np.argmax(inzone, axis=1)
+    last = n - 1 - np.argmax(inzone[:, ::-1], axis=1)
+    tests[n:] = np.where(ok, cnt, 0)
+    span[n:] = np.where(ok & (cnt > 0), last - first, 0)
+    # level age: sessions since the first candle that reached the top zone - a later poke a little
+    # above the zone's first high is a test of the same top, not a new level
+    age[n:] = np.where(ok & (cnt > 0), n - first, 0)
+    if close is not None:
+        cw = sliding_window_view(np.asarray(close, dtype=float), n)[: m - n]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            drift[n:] = np.abs(cw[:, -1] - cw[:, 0]) / prev_atr[n:]
+    return rng, tests, span, age, drift
 
 
 def crossing_series(high, low, close, atr, p: CrossingParams, direction: str) -> CrossingSeries:
@@ -143,8 +214,16 @@ def crossing_series(high, low, close, atr, p: CrossingParams, direction: str) ->
         else:
             prior_clear = np.ones(n, dtype=bool)
         fresh = beyond & prev_comp & ~prev_beyond & prior_clear
+    if p.base_required:
+        brange, btests, bspan, bage, bdrift = base_quality(h, l, a, level, p.lookback, direction, p.base_touch_zone_atr, c)
+        with np.errstate(invalid="ignore"):
+            base_ok = np.isfinite(brange) & (brange <= p.base_max_range_atr) & (bage >= p.base_min_level_age) & (bdrift <= p.base_max_drift_atr)
+        fresh = fresh & base_ok
+    else:
+        brange, btests, bspan, bage, bdrift, base_ok = None, None, None, None, None, np.ones(n, dtype=bool)
     comp_idx = np.flatnonzero(computable)
     out = CrossingSeries(direction, sign, level, other, buf, computable, beyond, touch, prior_clear, fresh, int(comp_idx[0]) if len(comp_idx) else None)
+    out.base_ok, out.base_touches, out.base_touch_span, out.base_level_age, out.base_range_atr, out.base_drift_atr = base_ok, btests, bspan, bage, brange, bdrift
     if out.first is None:
         return out
     fresh_idx = np.flatnonzero(fresh)

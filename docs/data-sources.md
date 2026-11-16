@@ -20,6 +20,33 @@ All sources were fetched and their schemas checked on 3-Nov-2026 before relying 
 * Each refresh stores a dated snapshot. Historical queries use the latest snapshot on or before the date; **before the first snapshot the status is `UNKNOWN`** and the F&O / Non-F&O segments are empty rather than inferred. Membership is never inferred from volume, liquidity or market capitalisation.
 * Stored at `backend/data/nse_fno.csv` and in `universe_snapshots`.
 
+## Recent IPOs (universe `ipo`, part of `all`) - added 2026-11-16
+
+The user asked on 2026-11-15 / 16 to add the IPOs of the last 3 years and download their data, because most IPOs of the reference decks are outside NIFTY 500 / F&O.
+
+* **Source: NSE past public issues** `https://www.nseindia.com/api/public-past-issues` (JSON; the API needs the cookies of a visit to `https://www.nseindia.com/market-data/all-upcoming-issues-ipo` first). Fields used: `symbol`, `companyName`, `securityType` (`Equity` = mainboard IPO, `SME`, `DEBT`, `InvIT`, `REIT`), `issuePrice`, `listingDate`, `priceRange`, `ipoStartDate`, `ipoEndDate`. Checked 16-Nov-2026: 1,493 issues back to 2003 (577 Equity, 784 SME).
+* **Joined with the NSE equity list** (`EQUITY_L.csv`, columns `SYMBOL`, `NAME OF COMPANY`, `SERIES`, `DATE OF LISTING`).
+* **Why not the equity list alone:** its `DATE OF LISTING` is the date of the NSE main-board listing, not of an IPO. Of the 751 symbols with a date in the last 3 years, many are SME-to-main-board migrations, direct listings of old BSE companies, demerged companies and rights entitlements (`-RE`). Only the past-issues list says which listings were IPOs.
+* **Membership rule** (`UniverseService.refresh_recent_ipos`, `recent_ipo_set`):
+  * an `Equity` (mainboard) IPO, or an `SME` IPO that has since moved to the main board;
+  * listed within `Settings.recent_ipo_years` (3) before the as-of date;
+  * trading on the main board now: in the equity list with series `EQ` or `BE` (`BZ` = non-compliant / suspended is left out);
+  * the equity-list date is not more than 7 days before the issue's listing date. Otherwise the issue was an FPO / re-issue of an old listing (example: an FPO of a stock listed years earlier).
+* **Left out (ASSUMPTION):** SME stocks still on NSE Emerge (lot-size trading, thin volume; not in the equity list), debt, InvIT and REIT issues, and issues without a listing date (withdrawn / postponed).
+* 16-Nov-2026: 313 mainboard IPOs in 3 years (303 still in the equity list), plus 24 SME IPOs now on the main board. 63 of them were already in NIFTY 500 / F&O.
+* **Stored** in `ipo_listings`:
+  * migration 11: issue price, IPO listing date, type, equity-list series and date, `mainboard` flag;
+  * migration 12: `split_factor` = the product of the Yahoo split / bonus ratios after the listing date, so that the issue price can be put on the chart's split-adjusted basis (`docs/ipo-base.md`). The whole list is replaced on each successful refresh; a failed download keeps the stored list (`universe_refresh_log`, list `recent_ipos`).
+* Each member gets a `stocks` row: company and series from the equity list, `listing_date` = the IPO listing date, `listing_date_source = nse_ipo`. The daily equity-list refresh does not overwrite an `nse_ipo` date. For an SME IPO that moved later, the IPO base scanner therefore starts at the SME listing, not at the migration day.
+* **Refresh:** at start-up when the table is empty, every weekday at 08:30 IST with the rest of the universe, and on `POST /api/universe/refresh`.
+* **Universes:**
+  * `ipo` = the recent IPOs, including the ones that are also in NIFTY 500;
+  * `all` = NIFTY 500 + F&O + recent IPOs;
+  * `nifty500`, `fno` and `non_fno` are unchanged (`non_fno` is still NIFTY 500 stocks without F&O).
+  * Result pages filter `ipo` by today's window.
+* **As-of dates:** membership follows the IPO listing date, so an as-of date sees the listings of the 3 years before it. IPOs delisted since are missing from today's lists, and a warning says so.
+* **Market data:** a new member has no cache yet, so the next scan of each timeframe downloads its full Yahoo history (`<SYMBOL>.NS`), as for any other stock. Industry is not in either NSE list, so the sector-strength part of the confluence score is empty for these stocks.
+
 ## NSE trading holidays
 
 * API: `https://www.nseindia.com/api/holiday-master?type=trading`, capital-market segment `CM`. It returns only the **current year** (20 entries for 2026, including weekend dates and the 15-Jan-2026 municipal-election holiday).

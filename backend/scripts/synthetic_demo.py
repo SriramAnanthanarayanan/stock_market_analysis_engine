@@ -87,9 +87,17 @@ def break52(cal: NSECalendar) -> pd.DataFrame:
 
 
 def setup10(cal: NSECalendar) -> pd.DataFrame:
-    """A walk whose latest candle closes 0.3 % under its previous 10-day high (about to break out)."""
+    """A walk that ends in a quiet 12-session base (SignalConfig 1.3.0: the 10-day level must be a
+    base); the latest candle closes 0.3 % under the base's high (about to break out)."""
     f = random_walk(700, cal, seed=41, vol=0.012).copy()
     i = len(f) - 1
+    p0 = float(f["close"].iloc[i - 13])
+    for k, j in enumerate(range(i - 12, i)):
+        c_j = p0 * (1 + 0.004 * (1 if k % 2 else -1))
+        f.iloc[j, f.columns.get_loc("open")] = p0
+        f.iloc[j, f.columns.get_loc("close")] = c_j
+        f.iloc[j, f.columns.get_loc("high")] = max(p0, c_j) * 1.003
+        f.iloc[j, f.columns.get_loc("low")] = min(p0, c_j) * 0.997
     hi = float(f["high"].iloc[i - 10 : i].max())
     o = float(f["close"].iloc[i - 1])
     c = hi * 0.997
@@ -166,6 +174,20 @@ def main() -> None:
         fr = frames(cal)
         eq = "SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING\n" + "".join(f"{sym},{sym} Ltd,EQ,{fr[(sym, '1d')].index[0].strftime('%d-%b-%Y').upper()}\n" for sym in IPO_SYMBOLS)
         s.universe.refresh_listing_dates(text=eq, source="synthetic-demo", min_rows=1)
+        # the same two listings as mainboard IPOs (NSE past-issues format; SYNTHETIC issue prices)
+        issues = [
+            {"symbol": sym, "companyName": f"{sym} Ltd", "securityType": "Equity", "issuePrice": f"{float(fr[(sym, '1d')]['open'].iloc[0]) * 0.9:.0f}", "listingDate": fr[(sym, "1d")].index[0].strftime("%d-%b-%Y").upper()}
+            for sym in IPO_SYMBOLS
+        ]
+        s.universe.refresh_recent_ipos(payload=issues, equity_text=eq, source="synthetic-demo", min_rows=1, equity_min_rows=1)
+
+        class _NoSplits:  # the synthetic histories have no splits / bonus issues
+            name = "synthetic"
+
+            def splits(self, symbol):
+                return {}
+
+        s.universe.refresh_ipo_splits(_NoSplits(), pause_s=0)
         s.indices.refresh_catalogue(catalogue(cal), min_rows=5)
         s.indices.refresh_all()
         from app.scanner import ScanRequest

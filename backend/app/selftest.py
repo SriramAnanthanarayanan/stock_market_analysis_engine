@@ -480,6 +480,44 @@ def advanced_checks(r: Runner, cal: NSECalendar) -> None:
     r.check("adv", "VCP: failed breakout", vcp(VCPSpec(tail=[(1.02, 2.5e5), (0.97, 0.6e5), (0.965, 0.6e5)]), {"failed_breakout"}))
     four = dict(depths=(28, 15, 8, 4), recover=(0.99, 0.99, 0.99, 0.985), down_bars=(8, 6, 4, 3), up_bars=(8, 6, 5, 4), volumes=(1e5, 0.8e5, 0.6e5, 0.4e5))
     r.check("adv", "VCP: four successive contractions T1 > T2 > T3 > T4", vcp(VCPSpec(**four), {"near_pivot", "final_contraction"}))
+    r.check("adv", "VCP 3.0: > 5 % above the pivot without volume is Extended", vcp(VCPSpec(tail=[(1.02, 0.6e5), (1.045, 0.6e5), (1.075, 0.6e5)]), {"extended"}, "extended"))
+    r.check("adv", "VCP 3.0: a final contraction younger than a week is not qualified", vcp(VCPSpec(down_bars=(8, 6, 1), up_bars=(8, 6, 2)), {"forming"}))
+
+    # SignalConfig 1.4.0: shared level engine + Darvas box (synthetic; proves the rules, not accuracy)
+    import pandas as _pd
+
+    from .signals.darvas import detect_darvas
+    from .signals.multiyear import multiyear_approach
+    from .synthetic import trading_day_index as _tdi
+
+    def _frame(closes, highs=None, lows=None, vols=None):
+        c = np.asarray(closes, dtype=float)
+        o = np.concatenate([[c[0]], c[:-1]])
+        h = np.maximum(o, c) + 0.5 if highs is None else np.asarray(highs, dtype=float)
+        lo = np.minimum(o, c) - 0.5 if lows is None else np.asarray(lows, dtype=float)
+        v = np.full(len(c), 1e5) if vols is None else np.asarray(vols, dtype=float)
+        return _pd.DataFrame({"open": o, "high": h, "low": lo, "close": c, "volume": v}, index=_tdi(len(c), cal))
+
+    def darvas_breakout():
+        closes = list(50 + np.sin(np.arange(300) / 5.0)) + list(np.linspace(52, 99.5, 40))
+        highs, lows = [x + 0.5 for x in closes], [x - 0.5 for x in closes]
+        highs[-1] = 100.0
+        for c_, h_, l_ in [(98.5, 99.0, 97.5), (97.0, 98.0, 96.0), (95.0, 96.5, 94.5), (94.5, 95.5, 94.0), (95.5, 96.0, 94.6), (96.5, 97.0, 95.0), (97.5, 98.0, 96.0), (101.5, 102.0, 98.0)]:
+            closes.append(c_), highs.append(h_), lows.append(l_)
+        d = detect_darvas(_frame(closes, highs, lows, [1e5] * (len(closes) - 1) + [3e5]), S, "S")
+        return bool(d and d["state"] == "breakout" and abs(d["box_top"] - 100.0) < 1e-9 and d["event"]["volume_ok"]), f"{d and d['state']}, box {d and d['box_top']}/{d and d['box_bottom']}"
+
+    def multiyear_range():
+        rng = []
+        for k in range(4):
+            rng += list(np.linspace(99.0, 75.0 + 3 * k, 94)) + list(np.linspace(75.0 + 3 * k, 99.0, 94))
+        f = _frame(list(np.linspace(40, 100, 500)) + rng + [97.0])
+        a = atr_wilder(f["high"].to_numpy(), f["low"].to_numpy(), f["close"].to_numpy(), 14)
+        m = multiyear_approach(f, a, S)
+        return bool(m and m["state"] == "approaching" and m["base_years"] >= 2.5 and m["zone_tests"] >= 3), f"{m and m['state']}, {m and m['base_years']} years, {m and m['zone_tests']} tests"
+
+    r.check("adv", "Darvas box: close above a confirmed box top on volume", darvas_breakout)
+    r.check("adv", "Multi-year range: about to break a 3-year resistance tested 4 times", multiyear_range)
 
     from .config import DEFAULT_IPO_CONFIG as I
     from .ipo import detect_ipo_base

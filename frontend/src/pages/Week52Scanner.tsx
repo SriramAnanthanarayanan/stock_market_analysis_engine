@@ -22,7 +22,7 @@ export function Week52Scanner() {
   const openChart = useOpenChart();
   const universe = (params.get("u") as Universe) || "all";
   const asof = params.get("asof") ?? "";
-  const view = (params.get("view") ?? "events") as "events" | "touch" | "state";
+  const view = (params.get("view") ?? "events") as "events" | "touch" | "state" | "approach";
   const direction = params.get("dir") ?? "both";
   const confirm = params.get("confirm") ?? "1";
   const maxAge = params.get("age") ?? "0";
@@ -112,6 +112,35 @@ export function Week52Scanner() {
     { key: "sessions", label: "Sessions", align: "right", render: (r) => r.available_sessions, sort: (r) => r.available_sessions, title: "Completed sessions before the latest candle" },
     { key: "official", label: "NSE official", render: (r) => <Official o={r.official} /> },
   ];
+  const APPR_CLS: Record<string, string> = { touched: "text-up", very_near: "text-accent", approaching: "text-forming" };
+  const openApproach = (r: Week52State) =>
+    openChart({
+      symbol: r.symbol,
+      timeframe: "1d",
+      asof: asof || null,
+      context: {
+        title: `${r.approach_label ?? "Approaching"} the 52-week high`,
+        lines: [
+          { k: "52-week high", v: `${fmtNum(r.high_52w ?? null)} (${fmtBarTime(r.high_52w_time ?? null, "1d")})` },
+          { k: "Close / below", v: `${fmtNum(r.close)} · ${fmtNum(r.distance_below_high_pct ?? null, 2)}% below` },
+          { k: "Tests of the high", v: `${r.high_tests ?? "-"} separate tests · score ${fmtNum(r.tests_score ?? null, 1)}${r.lows_rising ? " · lows rising" : ""}` },
+        ],
+        levels: [{ price: r.high_52w!, label: `52W high ${fmtNum(r.high_52w ?? null)}`, color: "#95EB45" }],
+        markers: (r.high_test_times ?? []).map((x) => ({ t: Math.floor(new Date(x).getTime() / 1000), label: "test", color: "#F5C542", position: "above" as const })),
+      },
+    });
+  const approachCols: Column<Week52State>[] = [
+    { key: "symbol", label: "Symbol", render: (r) => <SymbolButton symbol={r.symbol} onOpen={() => openApproach(r)} />, sort: (r) => r.symbol },
+    { key: "company", label: "Company", render: (r) => <span className="text-muted">{r.company}</span>, sort: (r) => r.company ?? "" },
+    { key: "fno", label: "F&O", render: (r) => <FnoBadge value={r.fno_status} /> },
+    { key: "state", label: "State", render: (r) => <span className={`font-medium ${APPR_CLS[r.approach_state ?? ""] ?? ""}`} data-approach={r.approach_state ?? ""}>{r.approach_label}</span>, sort: (r) => ({ touched: 0, very_near: 1, approaching: 2 } as Record<string, number>)[r.approach_state ?? ""] ?? 9 },
+    { key: "high", label: "52W high", align: "right", render: (r) => fmtNum(r.high_52w ?? null), sort: (r) => r.high_52w ?? null },
+    { key: "close", label: "Close", align: "right", render: (r) => fmtNum(r.close), sort: (r) => r.close },
+    { key: "below", label: "Below %", align: "right", render: (r) => fmtNum(r.distance_below_high_pct ?? null, 2), sort: (r) => r.distance_below_high_pct ?? null },
+    { key: "tests", label: "Tests", align: "right", render: (r) => <span className={(r.high_tests ?? 0) >= 3 ? "font-semibold text-validated" : ""} title={(r.high_test_times ?? []).map((x) => fmtBarTime(x, "1d")).join("\n")}>{r.high_tests ?? "-"}</span>, sort: (r) => r.high_tests ?? null, title: "Separate tests of the 52-week high zone (within 3 %, 10+ sessions apart); 3+ highlighted" },
+    { key: "lows", label: "Lows rising", render: (r) => (r.lows_rising == null ? "-" : r.lows_rising ? "yes" : "no"), sort: (r) => (r.lows_rising ? 1 : 0) },
+    { key: "official", label: "NSE official", render: (r) => <Official o={r.official} /> },
+  ];
 
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3" data-testid="week52-scanner">
@@ -130,6 +159,7 @@ export function Week52Scanner() {
             <option value="events">Fresh breakouts (completed close)</option>
             <option value="touch">Intraday touches (provisional)</option>
             <option value="state">52-week range of every stock</option>
+            <option value="approach">About to break the 52-week high</option>
           </select>
         </Field>
         <Field label="Type">
@@ -147,7 +177,7 @@ export function Week52Scanner() {
             </select>
           </Field>
         )}
-        {view !== "state" ? (
+        {view === "approach" ? null : view !== "state" ? (
           <Field label="Sessions since">
             <select className="ctl" value={maxAge} onChange={(e) => set({ age: e.target.value === "0" ? "" : e.target.value })} data-testid="age-select">
               <option value="0">Today</option>
@@ -181,7 +211,9 @@ export function Week52Scanner() {
       </TechScanHeader>
       {error && <ErrorNote message={error} />}
       {res?.note && <div className="text-[11px] text-muted">{res.note}{res.official_report_date ? ` Official NSE report: ${res.official_report_date}.` : " No official NSE 52-week report stored for this date."}</div>}
-      {view === "state" ? (
+      {view === "approach" ? (
+        <DataTable rows={(res?.items ?? []) as Week52State[]} columns={approachCols} testid="week52-table" onRow={openApproach} empty="No stock is approaching its 52-week high on the latest daily scan." initialSort={{ key: "tests", desc: true }} />
+      ) : view === "state" ? (
         <DataTable rows={(res?.items ?? []) as Week52State[]} columns={stateCols} testid="week52-table" onRow={openState} empty="No stock matches these filters." initialSort={{ key: "dh", desc: true }} />
       ) : (
         <DataTable rows={(res?.items ?? []) as FreshBreakout[]} columns={eventCols} testid="week52-table" onRow={openEvent} empty="No 52-week breakouts match these filters on the latest daily scan." initialSort={{ key: "atr", desc: true }} />

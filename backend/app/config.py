@@ -32,7 +32,7 @@ from typing import Any
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 TIMEFRAMES: tuple[str, ...] = ("1h", "4h", "1d", "1w")
-UNIVERSES: tuple[str, ...] = ("nifty500", "fno", "non_fno", "all")
+UNIVERSES: tuple[str, ...] = ("nifty500", "fno", "non_fno", "ipo", "all")
 
 # Provider interval that backs each analysis timeframe. 4H is resampled from 1H.
 TIMEFRAME_SOURCE_INTERVAL: dict[str, str] = {"1h": "1h", "4h": "1h", "1d": "1d", "1w": "1wk"}
@@ -63,6 +63,17 @@ class Settings:
     nifty500_url: str = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
     fno_url: str = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
     equity_list_url: str = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"  # official listing dates (IPO base)
+    # Recent-IPO universe: NSE's list of past public issues (IPO listing date, issue
+    # price, mainboard / SME). The page warms up the NSE cookies the API needs.
+    ipo_issues_url: str = "https://www.nseindia.com/api/public-past-issues"
+    ipo_issues_page: str = "https://www.nseindia.com/market-data/all-upcoming-issues-ipo"
+    # Mainboard IPOs listed in the last ``recent_ipo_years`` (USER, 2026-11-15: "add
+    # recent IPOs, last 3 years") join the scanned universe ("Recent IPOs", part of "All").
+    # SME IPOs count only once they trade on the main board (EQ / BE series); SME
+    # stocks still on NSE Emerge are left out (lot-size trading, thin volume; the
+    # reference IPO decks use mainboard listings) - ASSUMPTION.
+    recent_ipo_years: int = 3
+    ipo_issues_min_rows: int = 100
     holidays_url: str = "https://www.nseindia.com/api/holiday-master?type=trading"
     # E2: official NSE index catalogue and index history (NSE Indices data on nseindia.com).
     index_catalogue_url: str = "https://www.nseindia.com/api/allIndices"
@@ -658,12 +669,12 @@ DEFAULT_INDEX_CONFIG = IndexConfig()
 
 @dataclass(frozen=True)
 class StageConfig:
-    version: str = "1.3.0"
+    version: str = "1.5.0"
     # ---- SOURCE: stage_analysis.txt section 1 / 4 / 10
     benchmark: str = "NIFTY 50"  # "Benchmark: Nifty 50 (^NSEI)"; rs_line.txt default 'NSE:NIFTY'
     # ---- SOURCE: section 2 (weekly base formation)
     base_lookback_weeks: int = 52
-    max_base_range_pct: float = 30.0
+    max_base_range_pct: float = 40.0  # 1.5.0 USER (2026-11-16): 30 -> 40 % with the 52-week minimum (s.2 said 30 %)
     base_high_proximity_pct: float = 5.0
     # ---- SOURCE: section 3 (30-week EMA, pandas ewm(span=30, adjust=False))
     ema_period: int = 30
@@ -694,22 +705,30 @@ class StageConfig:
     # the last weeks compared with the sideways base - ALL must hold. Longest base ranks first.
     setup_rank_by_base_length: bool = True
     setup_volume_pickup_ratio: float = 1.5  # last 4 weeks avg / avg of the 52 sideways weeks before them (1.5x = s.5 multiple)
+    # ---- USER (2026-11-15, 1.4.0): "the base is very strict, we miss 1-year bases" - relax it. The fixed
+    # 52-week window let only 16 of 457 stocks pass (a younger base had the prior decline inside the
+    # window). The base is now the longest stretch inside the 30 % band, at least 26 weeks.
+    base_mode: str = "variable"
+    min_base_weeks: int = 52  # 1.5.0 USER (2026-11-16): bases of at least one year
+    tight_base_range_pct: float = 30.0  # 1.5.0 USER: <= 30 % = tight (preferred), 30-40 % = wide
+    max_base_weeks: int = 520
 
 
 STAGE_SOURCE_PARAMS = (
-    "benchmark", "base_lookback_weeks", "max_base_range_pct", "base_high_proximity_pct", "ema_period", "ema_testing_band_pct",
+    "benchmark", "base_lookback_weeks", "base_high_proximity_pct", "ema_period", "ema_testing_band_pct",
     "ema_direction_lookback", "rs_length_weekly", "rs_length_daily", "rs_length_pine_default", "rs_trend_base", "rs_ma_length",
     "rs_ma_rising_bars", "price_sma_length", "price_sma_rising_bars", "volume_base_weeks", "volume_recent_weeks", "volume_expansion_ratio",
 )
 STAGE_ASSUMPTION_PARAMS = (
     "ema_flat_tolerance_pct", "prior_decline_min_pct", "prior_decline_lookback_weeks", "higher_lows_swing_k", "stage_rank_order", "benchmark_max_ffill_bars",
 )
-STAGE_USER_PARAMS = ("setup_rank_by_base_length", "setup_volume_pickup_ratio")
+STAGE_USER_PARAMS = ("setup_rank_by_base_length", "setup_volume_pickup_ratio", "base_mode", "min_base_weeks", "max_base_weeks", "max_base_range_pct", "tight_base_range_pct")
 
 STAGE_PARAM_META: dict[str, ParamMeta] = {
     "benchmark": ParamMeta("SOURCE stage_analysis.txt s.1/4/10: benchmark Nifty 50 (^NSEI); rs_line.txt comparative symbol default NSE:NIFTY.", "-", ("Stage Analysis", "RS Line")),
     "base_lookback_weeks": ParamMeta("SOURCE s.2: base lookback 52 weeks; base high = highest weekly high, base low = lowest weekly low.", "weeks", ("Stage Analysis",), ("1w",)),
-    "max_base_range_pct": ParamMeta("SOURCE s.2: maximum base range 30 % ((BaseHigh - BaseLow) / BaseLow x 100).", "%", ("Stage Analysis",), ("1w",)),
+    "max_base_range_pct": ParamMeta("USER (2026-11-16, 1.5.0: '52 weeks base, 30 to 40 %'; s.2 said 30 %): maximum base range ((BaseHigh - BaseLow) / BaseLow x 100, the s.2 formula). Long bases are naturally wider (O'Neil allows 33-50 % deep bases); with 52 weeks and 30 % only 7 of 469 stocks had a base on 2026-11-13. Bases <= tight_base_range_pct are labelled tight.", "%", ("Stage Analysis",), ("1w",)),
+    "tight_base_range_pct": ParamMeta("USER (2026-11-16, 1.5.0: '30 to 40 %'): a base is labelled tight (preferred) when the stock also holds a base of >= min_base_weeks inside this tighter band, else wide (the longest stretch fills the 40 % band, so its own range is usually 30-40 %). A label only: it never changes the stage.", "%", ("Stage Analysis",), ("1w",)),
     "base_high_proximity_pct": ParamMeta("SOURCE s.2: price proximity to base high within 5 %.", "%", ("Stage Analysis",), ("1w",)),
     "ema_period": ParamMeta("SOURCE s.3: ema30 = weekly_close.ewm(span=30, adjust=False).mean().", "weeks", ("Stage Analysis",), ("1w",)),
     "ema_testing_band_pct": ParamMeta("SOURCE s.3: price within +/-5 % of the EMA = testing / transition.", "%", ("Stage Analysis",), ("1w",)),
@@ -732,6 +751,9 @@ STAGE_PARAM_META: dict[str, ParamMeta] = {
     "stage_rank_order": ParamMeta("ASSUMPTION (s.8 ranks by 'stage classification' without an order): order of stages in the ranking.", "-", ("Stage Analysis",)),
     "setup_rank_by_base_length": ParamMeta("USER (stated setup, 2026-11-04): entry setups are ranked by base length, longest first ('the longer the base, the bigger the target').", "-", ("Stage Analysis",), ("1w",)),
     "setup_volume_pickup_ratio": ParamMeta("USER (stated setup, 2026-11-04: 'volume low in the sideways base, very high when about to break out'): average volume of the last 4 weeks / average volume of the 52 sideways weeks before them must be >= this. 1.5x = the volume-expansion multiple of stage_analysis.txt s.5; event study 2023-26 favoured >= 1.5x.", "ratio", ("Stage Analysis",), ("1w",)),
+    "base_mode": ParamMeta("USER (2026-11-15, 1.4.0: 'the base is very strict, we miss 1-year bases; relax it slightly'): 'variable' = the base is the longest stretch of weeks before the current one whose range stays inside max_base_range_pct ((BaseHigh - BaseLow) / BaseLow, s.2 formula), and it must last >= min_base_weeks; the prior decline is measured in the prior_decline_lookback_weeks before the base starts. 'fixed' = s.2 literally (the previous 52 weeks). Live check 2026-11-15: fixed -> 7 valid bases in 469 stocks, variable (26 weeks, 30 %) -> 74.", "-", ("Stage Analysis",), ("1w",)),
+    "min_base_weeks": ParamMeta("USER (2026-11-16, 1.5.0; 1.4.0 had 26): shortest base in variable mode = 52 weeks. Weinstein gives no minimum, but prefers bigger bases (his good examples: a full-year and an 18-month base; a 6-month base is 'relatively small', a negative); stage_analysis.txt s.2 and the entry setup (2026-11-04) use 52 weeks. The setup ranks longer bases first.", "weeks", ("Stage Analysis",), ("1w",)),
+    "max_base_weeks": ParamMeta("USER (2026-11-15, 1.4.0) / engineering cap: the base length is measured up to this many weeks (10 years; the same cap as the reported base duration before 1.4.0).", "weeks", ("Stage Analysis",), ("1w",)),
     "benchmark_max_ffill_bars": ParamMeta("ASSUMPTION: Pine request.security (gaps_off) carries the last benchmark value onto stock bars; more than this many consecutive carried bars -> RS missing (data gap).", "bars", ("RS Line",)),
 }
 
@@ -740,6 +762,8 @@ KNOWN_STAGE_CONFIG_HASHES: dict[str, str] = {
     "1.1.0": "0d4849126e3192f0",  # higher lows k 2->3, rank Early Stage 2 first (event study 2018-2026, tuning/validation split)
     "1.2.0": "9561423e1323042f",  # user entry setup (confluence): quiet base 1.0, volume pickup 1.0, rank setups by base length
     "1.3.0": "86f711e9b6b7301b",  # user simplification: no decline-volume check; last 4w volume >= 1.5x the 52 sideways weeks before them
+    "1.4.0": "56b76f092831a312",  # user request 2026-11-15: variable-length base (longest stretch inside the 30 % band, >= 26 weeks); prior decline before the base start
+    "1.5.0": "b3c32f0c00891b3e",  # user 2026-11-16: base >= 52 weeks, range <= 40 % (<= 30 % = tight), base-height and swing-rule targets (display only)
 }
 
 DEFAULT_STAGE_CONFIG = StageConfig()
@@ -797,7 +821,7 @@ def _vs_liquidity() -> dict[str, float]:
 
 @dataclass(frozen=True)
 class SignalConfig:
-    version: str = "1.2.0"
+    version: str = "1.4.0"
     atr_period: int = 14  # must equal DetectionConfig.atr_period (enforced by tests)
 
     # ---- Fresh N-day breakout (spec 3): previous N completed daily candles, current excluded
@@ -811,6 +835,13 @@ class SignalConfig:
     fresh_volume_lookback: int = 20
     fresh_store_sessions: int = 60
     touch_store_sessions: int = 5
+    # ---- 1.3.0 (user request 2026-11-15): the 10-day level must be a 10-day BASE, broken for the
+    # first time - not the previous candle's high in a trend. Also gates the about-to-break-out states.
+    fresh_require_base: bool = True
+    fresh_base_max_range_atr: float = 3.5
+    fresh_base_touch_zone_atr: float = 0.5
+    fresh_base_min_level_age: int = 3
+    fresh_base_max_drift_atr: float = 2.0
 
     # ---- 52-week high breakout / low breakdown (spec 5)
     w52_lookback_sessions: int = 252
@@ -856,6 +887,27 @@ class SignalConfig:
     multiyear_horizons_months: tuple[int, ...] = (1, 3, 6, 12, 24, 36)
     multiyear_benchmark: str = "NIFTY 50"
 
+    # ---- 1.4.0 (user plan phase 2, 2026-11-16): shared level engine - separate tests of a level,
+    # a 0-1 test score (3+ tests rank higher) and approach states before the 52-week / multi-year break
+    level_tests_score: tuple[float, ...] = (0.0, 0.2, 0.5, 0.8, 1.0)  # 0, 1, 2, 3, 4+ separate tests
+    fresh_base_test_separation: int = 2
+    w52_zone_pct: float = 3.0
+    w52_test_separation_sessions: int = 10
+    w52_approach_pct: float = 5.0
+    w52_very_near_pct: float = 2.0
+    multiyear_approach_pct: float = 5.0
+    multiyear_very_near_pct: float = 2.0
+
+    # ---- 1.4.0: Darvas box (Nicolas Darvas, "How I Made $2,000,000 in the Stock Market", 1960)
+    darvas_confirm_sessions: int = 3
+    darvas_new_high_lookback: int = 252
+    darvas_near_pct: float = 2.0
+    darvas_track_sessions: int = 10
+    darvas_volume_lookback: int = 50
+    darvas_breakout_volume_ratio: float = 1.5
+    darvas_max_boxes: int = 6
+    darvas_max_depth_pct: float = 20.0
+
 
 SIGNAL_PARAM_META: dict[str, ParamMeta] = {
     "atr_period": ParamMeta("ATR period, Wilder smoothing (TradingView ta.atr). Shared with pattern detection.", "bars", ("ATR",)),
@@ -868,6 +920,11 @@ SIGNAL_PARAM_META: dict[str, ParamMeta] = {
     "fresh_rearm_on_new_range": ParamMeta("A fresh crossing of a reference window that starts after the previous event's breakout candle (a new N-session range formed above the old level) creates a new event without the close-back rule.", "flag", ("Fresh breakout",), ("1d",)),
     "fresh_volume_lookback": ParamMeta("Volume ratio of the breakout candle against the mean of the previous N completed daily candles.", "bars", ("Fresh breakout",), ("1d",)),
     "fresh_store_sessions": ParamMeta("Events whose breakout candle lies within the last N completed sessions are stored by each daily scan (sessions-since-breakout filter range).", "sessions", ("Fresh breakout",), ("1d",)),
+    "fresh_require_base": ParamMeta("USER (2026-11-15, 1.3.0: 'the 10-day level should not be the recent candle high; a base formed over 10 days must be broken for the first time, ideally caught before the breakout; same for breakdowns'): a fresh 10-day crossing and the about-to-break-out states need the 10-session reference window to be a base (tight range, top / bottom tested). False = the 1.2.0 rule (any crossing of the 10-day high / low).", "flag", ("Fresh breakout",), ("1d",)),
+    "fresh_base_max_range_atr": ParamMeta("ASSUMPTION: a 10-session base spans at most this x ATR(14) of the candle before the evaluated one (a trend leg of ~1 ATR a day spans ~10 ATR).", "x ATR", ("Fresh breakout",), ("1d",)),
+    "fresh_base_touch_zone_atr": ParamMeta("ASSUMPTION (the S/R engine clusters pivots within 0.5 ATR too): the base top (bottom) zone = within this x ATR(14) of the 10-session level. The level age counts from the first candle that reached the zone; candles in the zone and the sessions between the first and the last are reported (scoring 3+ tests is planned with the shared level engine).", "x ATR", ("Fresh breakout",), ("1d",)),
+    "fresh_base_max_drift_atr": ParamMeta("ASSUMPTION: a base goes sideways - |last close - first close| of the 10-session window <= this x ATR(14). A stair-step trend with short pauses drifts ~3 ATR; the live bases checked 2026-11-15 drifted 0-1.5 ATR.", "x ATR", ("Fresh breakout",), ("1d",)),
+    "fresh_base_min_level_age": ParamMeta("ASSUMPTION: the top (bottom) zone must have been first reached at least this many sessions before the evaluated candle - the top held, so it is not the previous candle's high in a trend (the user's objection to the 1.2.0 rule). Live check 2026-11-15: an exact-high age rejected breakouts whose top was poked by a wick 2 sessions earlier (POWERINDIA, MMTC).", "sessions", ("Fresh breakout",), ("1d",)),
     "touch_store_sessions": ParamMeta("Provisional intraday touches (10-day and 52-week levels) of the last N completed sessions are stored by each daily scan.", "sessions", ("Fresh breakout", "52-week"), ("1d",)),
     "w52_lookback_sessions": ParamMeta("52-week reference: previous 252 completed daily sessions (current excluded); fewer -> INSUFFICIENT_HISTORY.", "sessions", ("52-week",), ("1d",)),
     "w52_buffer_atr": ParamMeta("Close must exceed the previous 52-week high (fall below the low) by this x ATR(14).", "x ATR", ("52-week",), ("1d",)),
@@ -904,6 +961,22 @@ SIGNAL_PARAM_META: dict[str, ParamMeta] = {
     "multiyear_test_separation_sessions": ParamMeta("ASSUMPTION: highs inside the resistance zone count as separate tests when at least this many sessions apart.", "sessions", ("Multi-year",), ("1d",)),
     "multiyear_store_sessions": ParamMeta("Breakouts within the last N completed sessions are stored as events (scanner, confluence); every older one is kept in the stock's history for the chart and the event study.", "sessions", ("Multi-year",), ("1d",)),
     "multiyear_horizons_months": ParamMeta("Event study: forward price returns after each breakout at these horizons (descriptive; never used for detection).", "months", ("Multi-year",), ("1d",)),
+    "level_tests_score": ParamMeta("ASSUMPTION (user 2026-11-15: 'resistance touched at least 3 times shows buyer strength'): 0-1 score for 0, 1, 2, 3 and 4+ separate tests of a level (10-day base top, 52-week high, multi-year resistance, Darvas box top). Trading literature is split on whether more tests weaken or strengthen a level; this is a ranking aid to be validated, not a probability.", "score", ("Fresh breakout", "52-week", "Multi-year", "Darvas box"), ("1d",)),
+    "fresh_base_test_separation": ParamMeta("ASSUMPTION: inside the 10-session base, candles reaching the top zone count as a new test when at least this many sessions after the previous zone candle.", "sessions", ("Fresh breakout",), ("1d",)),
+    "w52_zone_pct": ParamMeta("ASSUMPTION (same zone as multi-year resistances): highs within this % of the 52-week high are tests of it.", "%", ("52-week",), ("1d",)),
+    "w52_test_separation_sessions": ParamMeta("ASSUMPTION: zone highs at least this many sessions apart are separate tests of the 52-week high.", "sessions", ("52-week",), ("1d",)),
+    "w52_approach_pct": ParamMeta("ASSUMPTION: Approaching the 52-week high = close within this % below it (Touched = intraday at or above it with the close below; Very Near = within w52_very_near_pct).", "%", ("52-week",), ("1d",)),
+    "w52_very_near_pct": ParamMeta("ASSUMPTION: Very Near the 52-week high = close within this % below it.", "%", ("52-week",), ("1d",)),
+    "multiyear_approach_pct": ParamMeta("ASSUMPTION (user 2026-11-15: 'a stock trading in a range for many years and about to break out'): a resistance within this % above the close that has capped the stock for >= multiyear_min_years is an approach candidate (the one with the longest base wins).", "%", ("Multi-year",), ("1d",)),
+    "multiyear_very_near_pct": ParamMeta("ASSUMPTION: Very Near a multi-year resistance = close within this % below it.", "%", ("Multi-year",), ("1d",)),
+    "darvas_confirm_sessions": ParamMeta("SOURCE (Darvas): a new high is the box top when the next 3 sessions fail to exceed it; the box bottom is the lowest low after the top that the next 3 sessions do not undercut.", "sessions", ("Darvas box",), ("1d",)),
+    "darvas_new_high_lookback": ParamMeta("SOURCE (Darvas traded stocks making new highs): the box top must be the highest high of this many sessions (52 weeks); shorter histories use what exists (flagged).", "sessions", ("Darvas box",), ("1d",)),
+    "darvas_near_pct": ParamMeta("ASSUMPTION: Near Top = a complete box whose close is within this % below the top.", "%", ("Darvas box",), ("1d",)),
+    "darvas_track_sessions": ParamMeta("ASSUMPTION: a box breakout / breakdown is reported for this many sessions.", "sessions", ("Darvas box",), ("1d",)),
+    "darvas_volume_lookback": ParamMeta("Breakout volume reference: mean of the previous N completed sessions.", "sessions", ("Darvas box",), ("1d",)),
+    "darvas_breakout_volume_ratio": ParamMeta("ASSUMPTION (Darvas wanted rising volume on the break, no number): breakout volume >= this x the reference is flagged volume-confirmed (reported, not a gate).", "ratio", ("Darvas box",), ("1d",)),
+    "darvas_max_boxes": ParamMeta("Boxes of the current advance kept for the chart (most recent first).", "boxes", ("Darvas box",), ("1d",)),
+    "darvas_max_depth_pct": ParamMeta("ASSUMPTION (Darvas's examples were mostly 5-15 % boxes; the book sets no limit): a box whose bottom falls more than this % below its top is a decline, not a pause - tracking stops until the next new 52-week high. Live check 2026-11-16: without it a falling stock built 20-38 % 'boxes'.", "%", ("Darvas box",), ("1d",)),
     "multiyear_benchmark": ParamMeta("Event study benchmark: official NSE index over the same calendar window (price index, like the stock's split-adjusted close).", "index", ("Multi-year",), ("1d",)),
 }
 
@@ -915,7 +988,7 @@ def _vcp_weights() -> dict[str, float]:
 
 @dataclass(frozen=True)
 class VCPConfig:
-    version: str = "2.0.0"
+    version: str = "3.0.0"
     atr_period: int = 14
     # ---- structure (Minervini: successive contractions T1 > T2 > ..., 2-4 typical, up to 6)
     swing_k: int = 3
@@ -929,9 +1002,26 @@ class VCPConfig:
     final_volume_ratio: float = 0.70
     near_pivot_pct: float = 3.0
     breakout_volume_ratio: float = 1.5
-    min_recovery_frac: float = 0.50
+    min_recovery_frac: float = 0.70  # 3.0.0: was 0.50 - each rally must come back near the top (cup / handle look)
     base_high_tolerance_pct: float = 3.0
     base_start_high_lookback: int = 50
+    # ---- 3.0.0: contraction duration (live check 2026-11-15: 1-3 session dips were counted as contractions)
+    min_decline_bars: int = 2
+    min_contraction_span_bars: int = 5
+    min_final_contraction_bars: int = 5
+    # ---- 3.0.0: Minervini Trend Template (was 10 % of the score only; HEROMOTOCO-type sideways stocks qualified)
+    trend_template_required: bool = True
+    tt_52w_sessions: int = 252
+    tt_max_below_52w_high_pct: float = 25.0
+    tt_min_above_52w_low_pct: float = 30.0
+    tt_sma200_rising_sessions: int = 21
+    # ---- 3.0.0: Extended (above the pivot beyond the buy zone without a valid breakout)
+    extended_pct: float = 5.0
+    # ---- 3.0.0: cup-with-handle shape tag (O'Neil; descriptive only, never a gate)
+    cup_min_bars: int = 30
+    cup_depth_range_pct: tuple[float, float] = (12.0, 35.0)
+    cup_rim_tolerance_pct: float = 10.0
+    handle_max_depth_pct: float = 12.0
     # ---- preceding uptrend
     prior_trend_lookback: int = 126
     prior_advance_min_pct: float = 25.0
@@ -975,7 +1065,20 @@ VCP_PARAM_META: dict[str, ParamMeta] = {
     "final_volume_ratio": ParamMeta("ENGINEERING default (spec vcp.final_volume_ratio): mean volume of the final contraction <= this x the average volume of the 50 sessions before it (volume dry-up).", "ratio", ("VCP",), ("1d",)),
     "near_pivot_pct": ParamMeta("Near Pivot when the close is within this % below the pivot (spec vcp.near_pivot_pct).", "%", ("VCP",), ("1d",)),
     "breakout_volume_ratio": ParamMeta("Breakout volume must be >= this x the previous 50-day average volume (spec vcp.breakout_volume_ratio).", "ratio", ("VCP",), ("1d",)),
-    "min_recovery_frac": ParamMeta("ENGINEERING: a new contraction starts only at a swing high that recovered at least this share of the previous contraction's decline (a bounce inside a decline is not a new contraction).", "fraction", ("VCP",), ("1d",)),
+    "min_recovery_frac": ParamMeta("ENGINEERING (3.0.0: 0.50 -> 0.70): a new contraction starts only at a swing high that recovered at least this share of the previous contraction's decline (a bounce inside a decline is not a new contraction). Reference VCPs (BSE 2021, Olectra 2023, IREDA / Data Patterns 2024) recovered about 75-97 % before the next pullback (0.70 leaves a margin for reading those charts; live check: 0.50 let 5-day dips with 55 % bounces and pivots 8 % under the base high count as VCPs).", "fraction", ("VCP",), ("1d",)),
+    "min_decline_bars": ParamMeta("ENGINEERING (3.0.0): a contraction's decline (high -> low) must last at least this many sessions; a one-candle wick is noise, not a contraction.", "sessions", ("VCP",), ("1d",)),
+    "min_contraction_span_bars": ParamMeta("ENGINEERING (3.0.0): a completed contraction (its high -> the next contraction high) must span at least this many sessions (about a week); a shorter dip stays part of the running contraction.", "sessions", ("VCP",), ("1d",)),
+    "min_final_contraction_bars": ParamMeta("ENGINEERING (3.0.0, O'Neil: a handle lasts at least a week): sessions from the final contraction high to the latest (or pre-breakout) candle before the VCP can qualify.", "sessions", ("VCP",), ("1d",)),
+    "trend_template_required": ParamMeta("SOURCE (Minervini Trend Template) (3.0.0): the base must start, and the pivot be reached, inside a Stage 2 uptrend: close > SMA50, close > SMA150 and SMA200, SMA150 > SMA200, SMA50 > SMA150 and SMA200, SMA200 rising, >= 30 % above the 52-week low, within 25 % of the 52-week high. Checked at the base start on its close (candidate filter) and at the base end on the pivot price, the buy point (gate; a final contraction may dip under the 50-day average). Checks without enough history are skipped (flagged); price > SMA50 and the 52-week-high distance are always required. The RS-rating criterion is not used (no IBD rating).", "flag", ("VCP",), ("1d",)),
+    "tt_52w_sessions": ParamMeta("Trend Template: 52-week high / low window (completed sessions up to the candle; fewer available -> the available history, flagged).", "sessions", ("VCP",), ("1d",)),
+    "tt_max_below_52w_high_pct": ParamMeta("SOURCE (Minervini): close within this % of the 52-week high.", "%", ("VCP",), ("1d",)),
+    "tt_min_above_52w_low_pct": ParamMeta("SOURCE (Minervini): close at least this % above the 52-week low.", "%", ("VCP",), ("1d",)),
+    "tt_sma200_rising_sessions": ParamMeta("SOURCE (Minervini: 200-day MA trending up for at least one month): SMA200 now > SMA200 this many sessions ago.", "sessions", ("VCP",), ("1d",)),
+    "extended_pct": ParamMeta("ENGINEERING (3.0.0; Minervini's buy zone is up to about 5 % above the pivot): a qualified VCP whose close is more than this % above the pivot without a volume breakout is Extended (no entry; wait for a new base). A real breakout that runs beyond it is flagged extended.", "%", ("VCP",), ("1d",)),
+    "cup_min_bars": ParamMeta("ASSUMPTION (O'Neil cup, shortened for daily VCPs): the first contraction (high -> next contraction high) spans at least this many sessions to be called a cup. Shape tag only, never a gate.", "sessions", ("VCP",), ("1d",)),
+    "cup_depth_range_pct": ParamMeta("ASSUMPTION (O'Neil: cups typically 12-33 %, up to ~35 %): first-contraction depth range for the cup tag.", "%", ("VCP",), ("1d",)),
+    "cup_rim_tolerance_pct": ParamMeta("ASSUMPTION: the handle (final contraction) starts within this % of the cup's left high.", "%", ("VCP",), ("1d",)),
+    "handle_max_depth_pct": ParamMeta("ASSUMPTION (O'Neil: handle 8-12 %, upper half of the cup): final-contraction depth for the handle tag; its low must also stay in the upper half of the cup.", "%", ("VCP",), ("1d",)),
     "base_high_tolerance_pct": ParamMeta("ENGINEERING: before a breakout no later high may exceed the base's first high by more than this % (otherwise the base start is not the base high).", "%", ("VCP",), ("1d",)),
     "base_start_high_lookback": ParamMeta("ENGINEERING: the first contraction high must be the highest high of the previous N sessions (the base starts at a high).", "sessions", ("VCP",), ("1d",)),
     "prior_trend_lookback": ParamMeta("ENGINEERING: sessions before the base searched for the low the preceding advance started from.", "sessions", ("VCP",), ("1d",)),
@@ -1006,15 +1109,15 @@ VCP_PARAM_META: dict[str, ParamMeta] = {
 
 @dataclass(frozen=True)
 class IPOConfig:
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     # ---- spec initial defaults (engineering, configurable)
     min_age_bars: int = 25
-    max_age_bars: int = 365
+    max_age_bars: int = 500  # 1.1.0: 365 -> 500 (long IPO bases: TEGA ~11 months, IEX / CDSL years)
     discovery_bars: int = 20
     min_base_bars: int = 20
-    max_base_bars: int = 120
+    max_base_bars: int = 250  # 1.1.0: 120 -> 250
     min_base_depth_pct: float = 8.0
-    max_base_depth_pct: float = 35.0
+    max_base_depth_pct: float = 50.0  # 1.1.0: 35 -> 50 (scored lower above 35 %)
     min_resistance_touches: int = 2
     near_pivot_pct: float = 3.0
     breakout_volume_ratio: float = 1.5
@@ -1030,10 +1133,25 @@ class IPOConfig:
     breakout_track_bars: int = 10
     listing_gap_tolerance_sessions: int = 5
     first_candle_fallback: bool = False
+    # ---- 1.1.0 (reference decks "How to Buy IPO stocks", phase 3 of the 2026-11-15 plan)
+    deep_base_pct: float = 35.0
+    cheat_window_bars: int = 15
+    cheat_min_below_pct: float = 5.0
+    cheat_max_depth_pct: float = 12.0
+    cheat_min_level_age: int = 3
+    cheat_min_position: float = 0.5
+    retest_zone_pct: float = 3.0
     weights: dict[str, float] = field(default_factory=lambda: {"depth": 20, "length": 15, "resistance": 20, "volume_dry_up": 20, "tightness": 15, "proximity": 10})
 
 
 IPO_PARAM_META: dict[str, ParamMeta] = {
+    "deep_base_pct": ParamMeta("ASSUMPTION (1.1.0): bases deeper than this % (up to max_base_depth_pct) stay valid but score lower (reference decks: TEGA ~48 %, GoColors ~36 % below the listing high).", "%", ("IPO base",), ("1d",)),
+    "cheat_window_bars": ParamMeta("ASSUMPTION (1.1.0, reference 'cheat entry: a base within the bigger base'): the sub-base is the last N sessions before the evaluated candle.", "sessions", ("IPO base",), ("1d",)),
+    "cheat_min_below_pct": ParamMeta("ASSUMPTION: the sub-base top lies at least this % below the IPO base pivot (otherwise it is the real pivot).", "%", ("IPO base",), ("1d",)),
+    "cheat_max_depth_pct": ParamMeta("ASSUMPTION: the sub-base is tight - its range at most this % of its top.", "%", ("IPO base",), ("1d",)),
+    "cheat_min_level_age": ParamMeta("ASSUMPTION: the sub-base top was set at least this many sessions before the break (it held).", "sessions", ("IPO base",), ("1d",)),
+    "cheat_min_position": ParamMeta("ASSUMPTION (reference cheat bases of TEGA, GoColors and Syrma sit in the upper half of the IPO base): the sub-base top must be at least this share of the way from the base low to the pivot. Live check 2026-11-16: without it a sharp bounce off the base low (CANHLIFE) was called a cheat entry.", "share", ("IPO base",), ("1d",)),
+    "retest_zone_pct": ParamMeta("ASSUMPTION (1.1.0, reference: breakouts often retest the breakout level, e.g. Clean Science): after a breakout, a low within this % above the pivot followed by a close above it = retest held (reported).", "%", ("IPO base",), ("1d",)),
     "min_age_bars": ParamMeta("Spec ipo.min_age_bars: fewer completed sessions since listing -> Too Young.", "sessions", ("IPO base",), ("1d",)),
     "max_age_bars": ParamMeta("Spec ipo.max_age_bars: older listings are not IPO-base candidates.", "sessions", ("IPO base",), ("1d",)),
     "discovery_bars": ParamMeta("Spec ipo.discovery_bars: first sessions after listing = initial price discovery (no base is validated inside it).", "sessions", ("IPO base",), ("1d",)),
@@ -1186,10 +1304,13 @@ KNOWN_SIGNAL_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "803155cbb7249f12",  # fresh 10-day breakouts, 52-week, Volume Shocker (initial engineering defaults)
     "1.1.0": "bb601be383bb6721",  # + about-to-break-out states of the 10-day level
     "1.2.0": "3f732a9d8a9675bd",  # + multi-year breakouts (base >= 1 year stored; any N years filtered)
+    "1.3.0": "a864a585683e1f22",  # user request 2026-11-15: the 10-day level must be a tested 10-session base (range <= 3.5 ATR, sideways drift <= 2 ATR, top zone first reached >= 3 sessions earlier)
+    "1.4.0": "262f4869ada3694c",  # phase 2 (2026-11-16): shared level engine (tests, 3+ tests score, approach states for 52-week / multi-year levels), Darvas box
 }
 KNOWN_VCP_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "819cd0e5d2a261bc",  # VCP detector (Minervini principles + engineering thresholds)
     "2.0.0": "2159765b755d4287",  # rebuilt: spec defaults (base 15-120, min 3 %, final volume 0.70), Final Contraction state, 6-part score
+    "3.0.0": "f2ac13aa34e3873b",  # live chart review 2026-11-15: contraction duration, recovery 0.70, Trend Template, Extended, cup-with-handle tag
 }
 KNOWN_CONFLUENCE_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "b1b29d836e9d6c12",  # five-category confluence score, placeholder weights
@@ -1198,6 +1319,7 @@ KNOWN_CONFLUENCE_CONFIG_HASHES: dict[str, str] = {
 }
 KNOWN_IPO_CONFIG_HASHES: dict[str, str] = {
     "1.0.0": "a2f7e09abbcbc9c9",  # IPO base breakout (spec initial defaults + engineering assumptions)
+    "1.1.0": "614edcaa19201ef2",  # phase 3 (reference decks): bases up to 250 sessions / 50 % deep, IPO low broken, cheat entry, retest
 }
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()

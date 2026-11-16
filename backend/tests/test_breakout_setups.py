@@ -112,7 +112,7 @@ def test_no_look_ahead(calendar):
 def test_setup_quality_is_explainable(calendar):
     s = setups(frame(calendar, [(99.4, 99.6)]))[0]
     q0, c0 = setup_quality(s)
-    assert 0 <= q0 <= 100 and {c["name"] for c in c0} == {"proximity", "tightness", "volume"}
+    assert 0 <= q0 <= 100 and {c["name"] for c in c0} == {"proximity", "tightness", "volume", "level_tests"}  # level_tests: SignalConfig 1.4.0
     q1, c1 = setup_quality({**s, "ema20": 97.0, "ema50": 95.0}, rs=0.05, stage="stage2_confirmed")
     names = {c["name"] for c in c1}
     assert {"trend", "relative_strength", "stage"} <= names and q1 > q0
@@ -173,3 +173,25 @@ def test_setups_explain_a_scan_from_before_the_feature(adv):
         with s.engine.begin() as conn:
             conn.execute(update(db.scans).where(db.scans.c.scan_id == sid).values(signal_config_version=s.signal_cfg.version))
     assert client.get("/api/scan/breakout-setups").json()["count"] > 0
+
+
+def test_approach_states_need_a_10_day_base(calendar):
+    """SignalConfig 1.3.0: no 'about to break out' state when the 10-session window is a trend
+    leg (the 'level' would be the previous candle's high)."""
+    closes = list(np.linspace(80, 99, 60))
+    c = np.asarray(closes, float)
+    o = np.concatenate([[c[0]], c[:-1]])
+    f = pd.DataFrame({"open": o, "high": np.maximum(o, c) + 0.3, "low": np.minimum(o, c) - 0.3, "close": c, "volume": np.full(len(c), 1e5)}, index=trading_day_index(len(c), calendar))
+    assert setups(f) == []
+    legacy = setups(f, SignalConfig(fresh_require_base=False))
+    assert legacy and legacy[0]["state"] in ("approaching", "very_near", "touched")
+    base = setups(frame(calendar, [(98.5, 98.7)]))  # the quiet base of the other tests: still a setup
+    assert base and base[0]["base_range_atr"] is not None and base[0]["base_level_age"] >= CFG.fresh_base_min_level_age
+
+
+def test_breakout_rows_report_the_base_that_was_broken(calendar):
+    """A breakout two sessions ago: the row's base facts are those of the broken base (event
+    candle's window), not of today's window (which now holds the breakout candles)."""
+    s = setups(frame(calendar, [(104.0, 104.5), (107.0, 107.5), (109.0, 109.5)]))
+    assert s and s[0]["state"] in ("breakout", "confirmed_breakout")
+    assert s[0]["base_valid"] is True and s[0]["base_range_atr"] <= CFG.fresh_base_max_range_atr

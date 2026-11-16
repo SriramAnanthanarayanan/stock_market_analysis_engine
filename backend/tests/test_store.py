@@ -41,6 +41,26 @@ def test_fresh_cache_is_not_downloaded_again(services_env):
     assert rep.fresh == 1 and len(provider.calls) == calls
 
 
+def test_fetch_before_daily_settle_is_refetched_after_it(services_env):
+    """A chart opened at 15:40 caches a provisional daily candle; once the close has
+    settled (15:30 + daily_settle_minutes) that fetch is no longer fresh."""
+    from datetime import datetime
+
+    from app.timeutil import IST
+
+    s, _ = services_env
+    s.market_data.ensure(["FCHAN"], "1d")
+    meta = dict(s.store.all_meta("1d")["FCHAN"])
+    fresh = s.market_data._is_fresh
+    meta["last_fetch_at"] = "2026-11-13T15:40:00+05:30"  # Friday, after the bar end, before settle
+    at_1550 = datetime(2026, 11, 13, 15, 50, tzinfo=IST)
+    at_1610 = datetime(2026, 11, 13, 16, 10, tzinfo=IST)
+    assert fresh(meta, "1d", at_1550, at_1550)  # settle not reached yet: good enough for now
+    assert not fresh(meta, "1d", at_1610, at_1610)  # settled: download the official close
+    meta["last_fetch_at"] = "2026-11-13T16:02:00+05:30"
+    assert fresh(meta, "1d", at_1610, at_1610)
+
+
 def test_incremental_refresh_overlaps_five_bars_without_duplicates(services_env):
     s, provider = services_env
     s.market_data.ensure(["FCHAN"], "1d")

@@ -95,6 +95,10 @@ class Services:
 
         self.stage = StageService(self)
         self.index_analysis.stage_lookup = self.stage.index_stage_lookup
+        # F&O OI activity: NSE bhavcopy data + the user's futures buildup rules (app/fno).
+        from .fno.service import FnoService
+
+        self.fno = FnoService(self)
         self._index_lock = threading.Lock()
         self.scheduler = None  # set by startup when enabled
         self.bootstrap_state: dict[str, Any] = {"state": "pending"}
@@ -146,6 +150,7 @@ class Services:
         register_config(self.engine, self.vcp_cfg)
         register_config(self.engine, self.confluence_cfg)
         register_config(self.engine, self.ipo_cfg)
+        self.fno.register()
         interrupted = self.scans.recover()
         log.info("database schema v%s ready (%s); %s interrupted scans marked", version, self.settings.db_path, interrupted)
         if background:
@@ -155,6 +160,9 @@ class Services:
         self.bootstrap_state = {"state": "running", "started_at": db.now_ist_iso()}
         try:
             uni = self.universe.ensure_loaded()
+            if self.settings.network_enabled:
+                # split / bonus factors of recent IPOs never checked yet (issue price vs chart basis)
+                threading.Thread(target=self.refresh_ipo_splits, kwargs={"only_unchecked": True}, name="ipo-splits", daemon=True).start()
             hol = self._maybe_refresh_holidays()
             self.bootstrap_state.update({"universe": uni, "holidays": hol})
             if self.settings.network_enabled and self.settings.startup_scans:
@@ -164,10 +172,20 @@ class Services:
 
                 self.scheduler = ScanScheduler(self)
                 self.scheduler.start(run_startup_scans=self.settings.startup_scans)
+            if self.settings.network_enabled and self.settings.startup_scans:
+                # NSE bhavcopy catch-up / first backfill (only missing sessions are downloaded)
+                self.fno.start_update(background=True, trigger="startup")
             self.bootstrap_state["state"] = "done"
         except Exception as exc:
             log.exception("bootstrap failed")
             self.bootstrap_state.update({"state": "error", "error": str(exc)})
+
+    def refresh_ipo_splits(self, only_unchecked: bool = False) -> dict[str, Any]:
+        try:
+            return self.universe.refresh_ipo_splits(self.provider, only_unchecked=only_unchecked)
+        except Exception as exc:  # never breaks the caller (bootstrap / scheduler)
+            log.exception("IPO split refresh failed")
+            return {"status": "error", "error": str(exc)}
 
     # ------------------------------------------------------------ E2 indices
     def refresh_indices(self, background: bool = True, force: bool = False, intraday: bool = True) -> dict[str, Any]:

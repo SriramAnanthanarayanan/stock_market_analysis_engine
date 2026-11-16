@@ -1,6 +1,6 @@
-# Volatility Contraction Pattern (VCP) - detector v2
+# Volatility Contraction Pattern (VCP) - detector v3
 
-Code: `backend/app/vcp/detector.py`; run by every **daily** scan (`ScanManager._store_vcp`), stored in `vcp_formations` / `vcp_contractions`; API `GET /api/scan/vcp`, `GET /api/vcp/symbol`; page **VCP Scanner**; chart overlay **VCP (1D)** in the chart terminal and the chart preview. Parameters: `VCPConfig` **2.0.0**, hash `2159765b755d4287` (`GET /api/config/vcp`). Synthetic fixtures: `backend/app/synthetic_vcp.py`.
+Code: `backend/app/vcp/detector.py`; run by every **daily** scan (`ScanManager._store_vcp`), stored in `vcp_formations` / `vcp_contractions`; API `GET /api/scan/vcp`, `GET /api/vcp/symbol`; page **VCP Scanner**; chart overlay **VCP (1D)** in the chart terminal and the chart preview. Parameters: `VCPConfig` **3.0.0**, hash `f2ac13aa34e3873b` (v3 changes: see the last section) (`GET /api/config/vcp`). Synthetic fixtures: `backend/app/synthetic_vcp.py`.
 
 The VCP is a dedicated **structure** detector. It is not a triangle, wedge, flag, rectangle or "low-volatility box", and it never changes the 17 price-action detectors or their configuration. Version 2 replaced the 1.0 detector (which reported a base box with contraction areas) with a time-ordered walk that must find **successive, shrinking contractions T1 > T2 > ... > final contraction -> pivot**.
 
@@ -14,7 +14,7 @@ The methodology is Mark Minervini's (*Trade Like a Stock Market Wizard*, 2013, c
 | A base / consolidation that starts at a high | the first contraction high is a confirmed swing high and the highest high of the previous 50 sessions | `base_start_high_lookback` 50 |
 | **Successive contractions**, each pullback smaller than the previous (often about half) | every contraction depth <= 0.75 x the previous depth | `max_next_contraction_ratio` 0.75 |
 | Two to four contractions typical, occasionally five or six | 2-6 contractions | `min_contractions` 2, `max_contractions` 6 (SOURCE) |
-| A contraction is a meaningful pullback, not noise | depth >= 3 % of its high | `min_contraction_pct` 3.0 |
+| A contraction is a meaningful pullback, not noise | depth >= 3 % of its high; v3: the decline lasts >= 2 sessions, the contraction (its high -> the next contraction high) >= 5 sessions, the final one >= 5 sessions before it can qualify | `min_contraction_pct` 3.0, `min_decline_bars` 2, `min_contraction_span_bars` 5, `min_final_contraction_bars` 5 |
 | Base length (weeks to months) | 15-120 completed sessions from the first contraction high | `min_base_bars` 15, `max_base_bars` 120 |
 | **Tight final contraction** | final depth <= 10 % | `max_final_contraction_pct` 10.0 |
 | **Volume dries up** as the base tightens | mean volume of the final contraction <= 0.70 x the 50-session average before it, and <= 0.85 x T1's mean volume | `final_volume_ratio` 0.70, `volume_final_vs_first_max` 0.85 |
@@ -28,7 +28,7 @@ For every candidate base start `s0` (a confirmed swing high, k = 3, that is the 
 
 1. A swing high is used only from the candle that **confirms** it (k = 3 later candles), so nothing is read from the future.
 2. A **contraction** runs from a contraction high to the lowest low before the next contraction high: `depth % = (high - low) / high x 100`.
-3. A confirmed swing high starts the **next** contraction only when the pullback before it is meaningful (>= 3 %) and the swing high recovered at least half of that pullback (`min_recovery_frac` 0.5). A smaller bounce belongs to the same contraction (a bounce inside a decline is not a new contraction); after a negligible dip a higher high restarts the contraction from the higher high.
+3. A confirmed swing high starts the **next** contraction only when the pullback before it is meaningful (>= 3 %, >= 2 sessions of decline, >= 5 sessions since the contraction high) and the swing high recovered at least 70 % of that pullback (`min_recovery_frac` 0.70; v2: 0.5). A smaller bounce belongs to the same contraction (a bounce inside a decline is not a new contraction); after a negligible dip a higher high restarts the contraction from the higher high.
 4. The running (final) contraction's low is **provisional** until it is a confirmed swing low; it is flagged.
 5. Invalidation while the base is forming: the running contraction becomes deeper than 0.75 x the previous one (volatility expanding), a close below the base low, or the base high exceeded by more than 3 % (`base_high_tolerance_pct`) before the structure qualified.
 6. A close above the pivot is evaluated with the gates of the base up to the candle **before** it (the breakout candle never qualifies its own base).
@@ -59,7 +59,8 @@ Stored in `vcp_contractions` and returned as `contraction_list`: label (T1, T2, 
 | Developing | one meaningful contraction so far (hidden by default) |
 | Forming | >= 2 contractions, each smaller than the previous, but a gate is still open (final not tight yet, volume not dried up, base too short); the open gates are listed |
 | Final Contraction | all gates pass (qualified); close more than 3 % below the pivot |
-| Near Pivot | qualified and the close is within 3 % below the pivot. Also used, **flagged** (`pivot_crossed_low_volume`), when a qualified VCP closed above the pivot **without** breakout volume - that is not a breakout |
+| Near Pivot | qualified and the close is within 3 % below the pivot. Also used, **flagged** (`pivot_crossed_low_volume`), when a qualified VCP closed above the pivot **without** breakout volume and is still inside the 5 % buy zone - that is not a breakout |
+| Extended (v3) | qualified, the close is more than `extended_pct` (5 %) above the pivot without a volume breakout: no entry, wait for a new base. A real breakout that runs beyond 5 % stays Breakout, flagged `extended` |
 | Breakout | completed close above the pivot while qualified, on volume >= 1.5 x the 50-session average (two-close mode: pending until the next close holds) |
 | Failed Breakout | after a breakout, 2 consecutive closes back below the pivot (`failed_breakout_closes`), or the second close fails in two-close mode |
 | Invalidated | volatility expanding (a contraction deeper than allowed), contractions not getting smaller, a close below the base low, the base high exceeded before the VCP qualified, or after a breakout a close below the final contraction low |
@@ -114,3 +115,23 @@ Secondary sources used to cross-check the principles (search results; no primary
 * [Sakatas - What really is a VCP pattern](https://sakatas.substack.com/p/what-really-is-a-vcp-pattern)
 
 **Not validated on real charts**: there are no labelled VCP examples yet, and every UI check ran on synthetic data. Treat the thresholds and the score as starting points; label charts (Labels & evaluation) before relying on them. No accuracy is claimed.
+
+## v3 - VCPConfig 3.0.0 (2026-11-15, live chart review)
+
+Why: the first live 1D scan (2026-11-15) showed v2 calling 1-3 session dips contractions (MEESHO T2 = 2 sessions, HEROMOTOCO T2 = a one-candle wick, ANTHEM T2 = 3 sessions), qualifying bases in stocks that were not in an uptrend (HEROMOTOCO below its March price; trend was only 10 % of the score), labelling MEESHO "Near Pivot" while it closed 10.6 % above the pivot, and scoring these 88-90. The reference material reviewed the same day (Minervini VCP decks with BSE 2021, Olectra 2023, IREDA / Data Patterns 2024 examples) shows rallies recovering 75-97 % of each pullback before the next one, stocks near their 52-week high and above rising averages.
+
+| Change | Rule | Parameter (ASSUMPTION unless SOURCE) |
+|---|---|---|
+| Contraction duration | decline >= 2 sessions; contraction high -> next contraction high >= 5 sessions; a shorter dip stays part of the running contraction | `min_decline_bars` 2, `min_contraction_span_bars` 5 |
+| Final contraction duration (gate `final_contraction_duration`) | the final contraction lasts >= 5 sessions (O'Neil: a handle lasts at least a week) before the VCP can qualify | `min_final_contraction_bars` 5 |
+| Recovery | a new contraction starts only after the rally recovered >= 70 % of the previous pullback (the "cup / handle" look; flat-ish tops) | `min_recovery_frac` 0.70 (v2 0.50) |
+| Trend Template (SOURCE: Minervini) | candidate filter at the base start (its close) and gate `trend_template` at the base end judged at the pivot price: price > SMA50, > SMA150 and SMA200, SMA150 > SMA200, SMA50 > SMA150 and SMA200, SMA200 rising over 21 sessions, >= 30 % above the 52-week low, within 25 % of the 52-week high. Checks without enough history are skipped (flagged); the IBD RS-rating criterion is not used | `trend_template_required`, `tt_*` |
+| Extended status | see States | `extended_pct` 5.0 |
+| Later volume breakout | after a low-volume close above the pivot, a later close above it on >= 1.5x volume, still within the 5 % buy zone and before the setup failed, is the breakout | - |
+| Shape tag (descriptive, never a gate) | `cup_with_handle` when T1 spans >= 30 sessions, is 12-35 % deep, the final contraction starts within 10 % of the cup's left high, is <= 12 % deep, stays in the upper half of the cup and lasts >= 5 sessions; otherwise `vcp`. Shown in the scanner (Shape column) and the panel | `cup_min_bars`, `cup_depth_range_pct`, `cup_rim_tolerance_pct`, `handle_max_depth_pct` |
+
+A VCP is not a rounding bottom (a saucer is a reversal base after a decline); a cup with handle is one VCP shape (cup = T1, handle = the final contraction).
+
+Live effect (cached data of 2026-11-13, 502 symbols): v2 reported 29 active VCPs (4 Near Pivot, 3 Final Contraction, 22 Forming); v3 reports 7 (1 Breakout - CUPID, flagged extended - and 6 Forming: ANTHEM and CPPLUS wait for a final contraction of a week, AETHER's final contraction is still 12 %). Dropped by the Trend Template: HEROMOTOCO, ASIANPAINT, ITCHOTELS, BERGEPAINT, OLAELEC, TATACOMM, ITI and others; dropped by the recovery rule: 5-day pullbacks with 55-65 % bounces whose pivots sat 7-8 % under the base high (TVSMOTOR, KPIL, ABDL). Charts were reviewed for each group. Engineering defaults, **not validated on labelled charts**; no accuracy is claimed.
+
+Schema `vcp-3.0` (adds `shape`); rows stored before 3.0.0 have no shape (shown as "-").

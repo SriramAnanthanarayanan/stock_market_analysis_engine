@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import date
 from typing import Any
@@ -179,6 +180,24 @@ def scan_status(request: Request, scan_id: str) -> dict[str, Any]:
     return _summary(scan)
 
 
+@router.get("/scan/active")
+def scan_active(request: Request) -> dict[str, Any]:
+    """Scans queued or running right now (startup, scheduler or manual). Cheap enough
+    for the UI to poll, so every page can show a background update and reload after it."""
+    s = svc(request)
+    post = s.scans.postprocessing()
+    # newest finished scans: the UI reloads a page when one appears that it has not seen.
+    # A daily/weekly scan is listed only after its confluence snapshot is written.
+    recent = [x for x in recent_scans(s.engine, 10) if x.get("state") not in ("queued", "running") and x["scan_id"] not in post]
+    return {
+        "time": now_ist().isoformat(timespec="seconds"),
+        "active": [_summary(x) for x in s.scans.active()],
+        "postprocessing": sorted(post),
+        "recent_finished": [_summary(x) for x in recent],
+        "startup_pending": s.scheduler.startup_pending() if s.scheduler is not None else [],
+    }
+
+
 @router.get("/scans", response_model=list[ScanSummary])
 def scans(request: Request, limit: int = Query(20, ge=1, le=200)) -> list[dict[str, Any]]:
     return [_summary(x) for x in recent_scans(svc(request).engine, limit)]
@@ -330,7 +349,16 @@ def universe(request: Request, universe: Universe = "all", asof: date | None = N
 @router.post("/universe/refresh")
 def universe_refresh(request: Request) -> dict[str, Any]:
     s = svc(request)
-    res = {"nifty500": s.universe.refresh_nifty500(), "fno": s.universe.refresh_fno(), "holidays": s.universe.refresh_holidays()}
+    res = {
+        "nifty500": s.universe.refresh_nifty500(),
+        "fno": s.universe.refresh_fno(),
+        "listing_dates": s.universe.refresh_listing_dates(),
+        "recent_ipos": s.universe.refresh_recent_ipos(),
+        "holidays": s.universe.refresh_holidays(),
+    }
+    # split / bonus factors of the recent IPOs: one provider call per symbol, in the background
+    threading.Thread(target=s.refresh_ipo_splits, name="ipo-splits", daemon=True).start()
+    res["ipo_splits"] = {"status": "started"}
     if res["holidays"].get("status") == "ok":
         s.reload_calendar()
     return res

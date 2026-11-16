@@ -14,10 +14,33 @@ from tests.test_api import refresh, wait_scan
 from tests.test_api_e1 import _crafted
 
 
+def _crafted_base(calendar):
+    """The E1 crafted breakout, but the 12 candles before it form a quiet base (SignalConfig 1.3.0:
+    a fresh 10-day breakout needs a 10-session base, not a random-walk window)."""
+    f = _crafted(calendar).copy()
+    n = len(f)
+    p0 = float(f["close"].iloc[n - 14])
+    for k, j in enumerate(range(n - 13, n - 1)):
+        c = p0 * (1 + 0.004 * (1 if k % 2 else -1))
+        f.iloc[j, f.columns.get_loc("open")] = p0
+        f.iloc[j, f.columns.get_loc("close")] = c
+        f.iloc[j, f.columns.get_loc("high")] = max(p0, c) * 1.003
+        f.iloc[j, f.columns.get_loc("low")] = min(p0, c) * 0.997
+    ref_high = float(f["high"].iloc[n - 11 : n - 1].max())
+    o = float(f["close"].iloc[n - 2])
+    c = ref_high * 1.04
+    f.iloc[-1, f.columns.get_loc("open")] = o
+    f.iloc[-1, f.columns.get_loc("close")] = c
+    f.iloc[-1, f.columns.get_loc("high")] = c + (c - o) * 0.01
+    f.iloc[-1, f.columns.get_loc("low")] = o - (c - o) * 0.01
+    f.iloc[-1, f.columns.get_loc("volume")] = float(f["volume"].iloc[-21:-1].mean()) * 3
+    return f
+
+
 @pytest.fixture
 def p1(client_env, calendar):
     client, s, provider, settings = client_env
-    provider.frames[("RWALK", "1d")] = _crafted(calendar)
+    provider.frames[("RWALK", "1d")] = _crafted_base(calendar)
     st = wait_scan(client, refresh(client, timeframe="1d")["scan_id"])
     assert st["state"] == "completed"
     return client, s, st

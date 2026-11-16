@@ -94,6 +94,7 @@ export function AboutToBreakout() {
     { key: "stage", label: "Stage", render: (r) => <StageChip st={r.stage} />, sort: (r) => r.stage?.stage ?? "" },
     { key: "q", label: "Setup quality", render: (r) => <QualityCell score={r.setup_quality} label="" />, sort: (r) => r.setup_quality, title: "Explainable screening score (proximity, trend, tightness, volume, RS, stage) - not a probability" },
     { key: "days", label: "Days in setup", align: "right", render: (r) => r.sessions_in_setup, sort: (r) => r.sessions_in_setup },
+    { key: "base", label: "10D base", align: "right", render: (r) => (r.base_range_atr == null ? "-" : `${r.base_level_age ?? "-"}d · ${r.base_range_atr.toFixed(1)} ATR`), sort: (r) => r.base_level_age ?? null, title: "SignalConfig 1.3.0: sessions the top zone has held (>= 3) and the 10-session range in ATR (<= 3.5); the window must also drift <= 2 ATR. A trend leg is not a base." },
   ];
 
   return (

@@ -125,7 +125,7 @@ Stage Analysis page: watchlist with symbol, company, current price, stage, 30W E
 | 9 Individual filter results and reasons | gates + reasons in API and UI |
 | 10 Independent of daily strategies | own module, own configuration, weekly scans only |
 
-## Configuration (`StageConfig` 1.3.0)
+## Configuration (`StageConfig` 1.5.0)
 
 SOURCE values: benchmark NIFTY 50; base 52 weeks; max range 30 %; proximity 5 %; EMA 30 (pandas ewm, adjust=False); testing band 5 %; EMA direction lookback 4; RS 52 (weekly) / 63 (daily) / 123 (Pine default, intraday); RS trend base 5; RS SMA 50; rising/falling 3 bars; price SMA 50; volume 26 / 4 weeks; expansion 1.5x.
 
@@ -239,3 +239,47 @@ Threshold test (same event study; base = the 52 weeks before the last 4):
 
 Live (4-Nov-2026): 0 stocks / 0 indices pass all 6 checks. DRREDDY passes 5/6 (80-week base, +9.6 % above the 30W EMA, RS +0.26, 4.5 % below the base high) and fails only volume (1.16x vs 1.5x).
 
+## Variable-length base - StageConfig 1.4.0 (15-Nov-2026, your request)
+
+You asked to relax the base ("the base is very strict, we miss 1-year bases") and chose the smallest change offered: a variable-length base, keeping the 30 % band. Hash `56b76f092831a312`.
+
+* **Base** (`base_mode = "variable"`): the longest stretch of weeks before the current one whose range stays inside the 30 % band (`(BaseHigh - BaseLow) / BaseLow x 100`, the s.2 formula), at least `min_base_weeks` = 26 weeks (cap `max_base_weeks` = 520). Base high / low / range / duration are measured on that stretch; the current week stays excluded (s.10 rule 6).
+* **Entry leg**: the stretch would otherwise start with the last weeks of the decline into the base (inside the band, each higher than every later week), and the base high would become a decline week near low x 1.3 instead of the range's resistance. Those leading weeks are dropped.
+* **Prior decline** (ASSUMPTION, unchanged 20 %): measured from the highest high of the 52 weeks before the base **start** to the base low.
+* `base_mode = "fixed"` keeps the s.2 literal 52-week window (1.3.0 behaviour).
+* A week wider than the band right before the current one means "no base" (Other), not missing history.
+
+Why: on 2026-11-15 only 16 of 457 stocks had a 52-week range <= 30 % (median 64 %) and 6 were classified at all; a base younger than 52 weeks had the prior decline inside the window and failed.
+
+Live effect (weekly cache of 2026-11-13, same rules otherwise): Stage 1 5 -> 41, Early Stage 2 1 -> 3, Stage 2 Confirmed 0 -> 1 (PNB), entry setups 0 -> 2 (MANKIND, PNB); 39 stocks changed class. The fixed-mode replay matched the stored live results exactly (5 / 1 / 0).
+
+Known limitation (also true of the fixed window): the band does not require a sideways trend - a slow 23 % drift down over 43 weeks fits a 30 % band (RELIANCE, Stage 1 on 2026-11-13). The setup's volume rule still compares the last 4 weeks with the 52 weeks before them, not with the (shorter) base. Both are left as they are until you decide.
+
+## One-year base, 30-40 % band, targets - StageConfig 1.5.0 (16-Nov-2026, your decision)
+
+You asked for bases of at least a year ("the longer the base, the bigger the target") and, after the source review below, chose: **52-week base, 30 to 40 % band, 30-week EMA and RS Line unchanged**. Hash `b3c32f0c00891b3e`.
+
+| Setting | 1.5.0 | Was (1.4.0) |
+|---|---|---|
+| `min_base_weeks` (USER) | **52** | 26 |
+| `max_base_range_pct` (USER; s.2 said 30 %) | **40** | 30 |
+| `tight_base_range_pct` (USER, label only) | 30 | - |
+| 30-week EMA, RS Line (RS 52 vs NIFTY 50), volume rules, prior decline | unchanged | |
+
+* **Tight / wide** (label, never changes the stage): *tight* when the stock also holds a base of >= 52 weeks inside the 30 % band; *wide* when only the 40 % band holds it. (The longest stretch fills the 40 % band, so its own range is usually 30-40 % and says little.) Live 16-Nov: 7 tight, 21 wide among the classified / setup stocks.
+* **Targets** (display only, `targets()` in `analysis.py`; columns *Target (height)* and *Target (swing)*, detail panel):
+  * base height = BaseHigh + (BaseHigh - BaseLow) - the base height projected above the breakout level;
+  * Weinstein swing rule (*Secrets*, ch. 6 "Measuring the Move") = old peak + (old peak - base low), the old peak being the highest high of the 52 weeks before the base start; shown only when that peak is above the base high (Weinstein applies it once price betters the old peak).
+  Both are approximations, not forecasts.
+
+### What the sources say about base length (review of 16-Nov-2026)
+
+* Weinstein (*Secrets*, read in full in `reference_document/`): no minimum. Stage 1 "can go on for months or, in some cases, years"; "the bigger the base, the greater the upside potential"; his good breakout had "a full year" base, the quiz answer prefers an 18-month base to a 6-month one, and a "relatively small base" is a negative. His target tool, the swing rule, uses the base **height**.
+* O'Neil (secondary summaries): continuation bases (cup with handle 7-65 weeks, 12-33 % deep, up to 40-50 % in bear markets) - Stage 2 bases, not Stage 1.
+* Wyckoff: the range is the "cause", the move the "effect" (point-and-figure horizontal count).
+* Bulkowski (the only statistics): **height** is the best predictor of the move's size; width (length) is a poor indicator (helps in bull markets).
+* Conclusion used: length selects and ranks (setups are ranked longest first), height sets the targets. Not validated on labelled outcomes.
+
+### Live effect (weekly scan 16-Nov-2026)
+
+Stage 1 41 -> 24, Early Stage 2 3 -> 2, Stage 2 Confirmed 1 -> 1 (PNB, now a 77-week base 98.50-135.15), entry setups 2 -> 3 (PNB 77 weeks, UNOMINDA 75, MANKIND 58). With 52 weeks and the old 30 % band only 7 stocks would have qualified. verify-e3 14/14 and verify-ui 28/28 on the live app.

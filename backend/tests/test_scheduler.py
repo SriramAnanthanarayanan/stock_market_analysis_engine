@@ -36,7 +36,7 @@ def test_jobs_are_never_duplicated(services_env):
     sch.start(run_startup_scans=False)
     try:
         ids = [j.id for j in sch.scheduler.get_jobs()]
-        assert sorted(ids) == sorted(set(ids)) == sorted(["scan_1h", "scan_4h", "scan_1d", "scan_1w", "universe_refresh", "index_refresh"])
+        assert sorted(ids) == sorted(set(ids)) == sorted(["scan_1h", "scan_4h", "scan_1d", "scan_1w", "universe_refresh", "index_refresh", "after_close", "fno_bhavcopy"])
     finally:
         sch.shutdown()
 
@@ -49,3 +49,34 @@ def test_startup_scan_order(services_env, monkeypatch):
     monkeypatch.setattr(s.scans, "wait", lambda *a, **k: None)
     sch.startup_scans()
     assert submitted == ["1d", "1w", "4h", "1h"]
+    assert sch.startup_pending() == []  # every startup timeframe handled
+
+
+def test_after_close_job_ticks_daily_and_weekly_after_settle(services_env, monkeypatch):
+    from datetime import time
+
+    s, _ = services_env
+    sch = ScanScheduler(s)
+    assert sch.after_close_time() == time(16, 1)  # 15:30 close + 30 min settle + 1
+    sch.start(run_startup_scans=False)
+    try:
+        job = sch.scheduler.get_job("after_close")
+        fields = {f.name: str(f) for f in job.trigger.fields}
+        assert fields["hour"] == "16" and fields["minute"] == "1" and fields["day_of_week"] == "mon-fri"
+    finally:
+        sch.shutdown()
+    ticked = []
+    monkeypatch.setattr(sch, "tick", lambda tf: ticked.append(tf))
+    sch.after_close()
+    assert ticked == ["1d", "1w"]
+
+
+def test_scan_active_endpoint(client_env):
+    client, s, _, _ = client_env
+    r = client.get("/api/scan/active")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["active"] == [] and body["recent_finished"] == [] and isinstance(body["startup_pending"], list)
+    done = s.scans.run_now(ScanRequest("all", "1d", trigger="scheduler"))
+    body = client.get("/api/scan/active").json()
+    assert body["active"] == [] and [x["scan_id"] for x in body["recent_finished"]] == [done]

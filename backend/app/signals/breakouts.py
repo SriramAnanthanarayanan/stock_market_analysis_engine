@@ -40,7 +40,10 @@ def event_id(symbol: str, kind: str, t: int, config_hash: str) -> str:
 
 
 def fresh_params(cfg: SignalConfig) -> CrossingParams:
-    return CrossingParams(cfg.fresh_lookback_days, cfg.fresh_buffer_atr, cfg.fresh_touch_buffer_atr, cfg.fresh_require_prior_level_clear, cfg.fresh_rearm_closes, cfg.fresh_rearm_on_new_range)
+    return CrossingParams(
+        cfg.fresh_lookback_days, cfg.fresh_buffer_atr, cfg.fresh_touch_buffer_atr, cfg.fresh_require_prior_level_clear, cfg.fresh_rearm_closes, cfg.fresh_rearm_on_new_range,
+        base_required=cfg.fresh_require_base, base_max_range_atr=cfg.fresh_base_max_range_atr, base_touch_zone_atr=cfg.fresh_base_touch_zone_atr, base_min_level_age=cfg.fresh_base_min_level_age, base_max_drift_atr=cfg.fresh_base_max_drift_atr,
+    )
 
 
 def w52_params(cfg: SignalConfig) -> CrossingParams:
@@ -152,6 +155,13 @@ def crossing_events(
                 "first_in_lookback": first_in_lookback(since_beyond, hist, first_lookback),
                 "previous_event_time": iso(times[prev_ep.event]) if prev_ep else None,
                 "sessions_since_previous_event": (i - prev_ep.event) if prev_ep else None,
+                "base_required": bool(p.base_required),
+                "base_range_atr": _r(cs.base_range_atr[i], 3) if cs.base_range_atr is not None else None,
+                "base_tests": int(cs.base_touches[i]) if cs.base_touches is not None else None,
+                "base_touch_span": int(cs.base_touch_span[i]) if cs.base_touch_span is not None else None,
+                "base_level_age": int(cs.base_level_age[i]) if cs.base_level_age is not None else None,
+                "base_drift_atr": _r(cs.base_drift_atr[i], 3) if cs.base_drift_atr is not None else None,
+                "base_valid": bool(cs.base_ok[i]) if cs.base_ok is not None else None,
                 "price_basis_note": "raw OHLC (split/bonus adjusted by the provider, not dividend adjusted)",
             }
             out.append(rec)
@@ -251,6 +261,23 @@ def week52_state(frame: pd.DataFrame, atr: np.ndarray, cfg: SignalConfig, walks:
     if walks:
         rec["fresh_cross_high"] = bool(walks["bullish"].fresh[i])
         rec["fresh_cross_low"] = bool(walks["bearish"].fresh[i])
+    # SignalConfig 1.4.0 (shared level engine): separate tests of the 52-week high and the
+    # approach state of the latest close (before the breakout)
+    from .levels import APPROACH_LABELS, approach_state, lows_rising, separate_tests, tests_score
+
+    zone_lo = hi * (1.0 - cfg.w52_zone_pct / 100.0)
+    tests = separate_tests(h, i - N, i - 1, zone_lo=zone_lo, separation=cfg.w52_test_separation_sessions)
+    state, dist = approach_state(float(c[i]), float(h[i]), hi, cfg.w52_approach_pct, cfg.w52_very_near_pct)
+    rec.update(
+        zone_floor=_r(zone_lo),
+        high_tests=len(tests),
+        high_test_times=[iso(times[k]) for k in tests[:12]],
+        tests_score=tests_score(len(tests), cfg.level_tests_score),
+        lows_rising=lows_rising(l, max(i - N, hi_i), i - 1),
+        approach_state=state,
+        approach_label=APPROACH_LABELS.get(state) if state else None,
+        distance_below_high_pct=_r(dist, 3),
+    )
     return rec
 
 
@@ -280,6 +307,8 @@ def _approach_state(cs: CrossingSeries, c: np.ndarray, atr: np.ndarray, i: int, 
     lvl = float(cs.level[i])
     if not np.isfinite(lvl) or lvl == 0:
         return None, None, None
+    if cs.base_ok is not None and not bool(cs.base_ok[i]):
+        return None, None, None  # SignalConfig 1.3.0: the 10-session window is not a base (no level to approach)
     a = float(atr[i]) if np.isfinite(atr[i]) and atr[i] > 0 else None
     dist = cs.sign * (lvl - c[i])  # > 0: still below the high (above the low for breakdowns)
     dpct = dist / lvl * 100.0
@@ -352,6 +381,8 @@ def breakout_setups(frame: pd.DataFrame, atr: np.ndarray, ema20: np.ndarray | No
         a = float(atr[i]) if np.isfinite(atr[i]) else None
         lo = max(0, i - cfg.fresh_lookback_days)
         r_hi, r_lo = float(np.max(h[lo:i])), float(np.min(l[lo:i]))
+        # base facts: of the event candle's window for breakout / confirmed / rejected states, else of today's
+        bi = ep.event if (ep is not None and state in ("breakout", "confirmed_breakout", "rejected") and event_info and "event_t" in event_info) else i
         e20 = float(ema20[i]) if ema20 is not None and np.isfinite(ema20[i]) else None
         e50 = float(ema50[i]) if ema50 is not None and np.isfinite(ema50[i]) else None
         lb = _level_bar(frame, i, cfg.fresh_lookback_days, direction)
@@ -382,6 +413,13 @@ def breakout_setups(frame: pd.DataFrame, atr: np.ndarray, ema20: np.ndarray | No
                 "volume": None if not np.isfinite(v[i]) else float(v[i]),
                 "volume_ratio": _r(prior_volume_ratio(v, i, cfg.fresh_volume_lookback), 3),
                 "range_10d_pct": _r((r_hi - r_lo) / r_hi * 100.0, 3) if r_hi > 0 else None,
+                "base_range_atr": _r(cs.base_range_atr[bi], 3) if cs.base_range_atr is not None else None,
+                "base_tests": int(cs.base_touches[bi]) if cs.base_touches is not None else None,
+                "base_touch_span": int(cs.base_touch_span[bi]) if cs.base_touch_span is not None else None,
+                "base_level_age": int(cs.base_level_age[bi]) if cs.base_level_age is not None else None,
+                "base_drift_atr": _r(cs.base_drift_atr[bi], 3) if cs.base_drift_atr is not None else None,
+                **_base_tests(h, l, cs, bi, cfg, bull),
+                "base_valid": bool(cs.base_ok[bi]) if cs.base_ok is not None else None,
                 "sessions_in_setup": run,
                 "touch": bool(cs.touch[i]),
                 "thresholds": {"approach_pct": cfg.about_to_breakout_pct, "approach_atr": cfg.about_to_breakout_atr, "very_near_pct": cfg.very_near_pct, "very_near_atr": cfg.very_near_atr, "rule": cfg.about_to_breakout_rule},
@@ -389,6 +427,20 @@ def breakout_setups(frame: pd.DataFrame, atr: np.ndarray, ema20: np.ndarray | No
             }
         )
     return out
+
+
+def _base_tests(h: np.ndarray, l: np.ndarray, cs: CrossingSeries, bi: int, cfg: SignalConfig, bull: bool) -> dict[str, Any]:
+    """Separate tests of the 10-session base top (bottom) - SignalConfig 1.4.0 level engine."""
+    from .levels import separate_tests, tests_score
+
+    n = cfg.fresh_lookback_days
+    lvl = float(cs.level[bi]) if np.isfinite(cs.level[bi]) else None
+    prev_atr = cs.buffer[bi - 1] / cfg.fresh_buffer_atr if (bi >= 1 and cfg.fresh_buffer_atr > 0 and np.isfinite(cs.buffer[bi - 1])) else None
+    if lvl is None or prev_atr is None or bi < n:
+        return {"base_separate_tests": None, "base_tests_score": None}
+    z = cfg.fresh_base_touch_zone_atr * prev_atr
+    idx = separate_tests(h if bull else l, bi - n, bi - 1, zone_lo=lvl - z if bull else None, zone_hi=None if bull else lvl + z, separation=cfg.fresh_base_test_separation)
+    return {"base_separate_tests": len(idx), "base_tests_score": tests_score(len(idx), cfg.level_tests_score)}
 
 
 def setup_quality(m: dict[str, Any], rs: float | None = None, stage: str | None = None, cfg: SignalConfig | None = None) -> tuple[float, list[dict[str, Any]]]:
@@ -415,6 +467,8 @@ def setup_quality(m: dict[str, Any], rs: float | None = None, stage: str | None 
     add("tightness", 15, None if rng is None else (15.0 - rng) / 10.0, rng, "10-day range: 1 at <= 5 %, 0 at >= 15 % (ASSUMPTION)")
     vr = m.get("volume_ratio")
     add("volume", 10, None if vr is None else (vr - 0.5) / 0.7, vr, "volume / 20-day average: 0 at 0.5, 1 at >= 1.2 (ASSUMPTION)")
+    if m.get("base_tests_score") is not None:
+        add("level_tests", 10, m["base_tests_score"], m.get("base_separate_tests"), "separate tests of the 10-day base top (bottom): 0 / 1 / 2 / 3 / 4+ -> SignalConfig.level_tests_score (3+ tests rank higher; SignalConfig 1.4.0, ASSUMPTION)")
     if rs is not None:
         add("relative_strength", 10, 1.0 if (rs > 0) == bull else 0.0, rs, "RS Line (weekly, rs_line.txt) on the setup's side of zero")
     if stage is not None:

@@ -2,7 +2,7 @@ import type { IpoGeometry, MultiYearEvent, VcpGeometry } from "../api/advanced";
 import type { OverlayShape } from "./OverlayPrimitive";
 import type { ChartMarker, VolumeHighlight } from "./PatternChart";
 
-// Draws the backend VCP geometry (schema vcp-2.0, docs/vcp-methodology.md) as a
+// Draws the backend VCP geometry (schema vcp-3.0, docs/vcp-methodology.md) as a
 // contraction structure: each contraction Tn is a swing leg from its high to its
 // low (labelled with its depth), recovery legs join them into a zig-zag, the final
 // contraction is highlighted, the pivot is a line from the final contraction's high,

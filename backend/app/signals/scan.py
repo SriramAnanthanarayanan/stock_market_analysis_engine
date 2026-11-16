@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 
 from ..config import SignalConfig, config_hash
-from .multiyear import multiyear_breakouts
+from .darvas import detect_darvas
+from .multiyear import multiyear_approach, multiyear_breakouts
 from .breakouts import breakout_setups, crossing_events, fresh_kind, fresh_params, touch_records, w52_kind, w52_params, week52_state
 from .volume import latest_volume_state, volume_shocks
 
@@ -25,6 +26,8 @@ class SignalOutputs:
     volume_state: dict[str, Any] = field(default_factory=dict)
     setups: list[dict[str, Any]] = field(default_factory=list)
     multiyear: list[dict[str, Any]] = field(default_factory=list)  # every multi-year breakout of the history
+    multiyear_approach: dict[str, Any] | None = None  # 1.4.0: below a multi-year resistance, about to break
+    darvas: dict[str, Any] | None = None  # 1.4.0: Darvas box state of the latest candle
 
 
 def run_signals(frame: pd.DataFrame, timeframe: str, atr: np.ndarray, ema20: np.ndarray | None, ema50: np.ndarray | None, cfg: SignalConfig, symbol: str, benchmark: pd.Series | None = None) -> SignalOutputs:
@@ -50,6 +53,8 @@ def run_signals(frame: pd.DataFrame, timeframe: str, atr: np.ndarray, ema20: np.
         out.w52_touches = touch_records(frame, w52walks, w52_kind, since=n - cfg.touch_store_sessions)
         out.w52_state = week52_state(frame, atr, cfg, w52walks)
         out.multiyear = multiyear_breakouts(frame, atr, cfg, symbol=symbol, config_hash=chash, benchmark=benchmark)
+        out.multiyear_approach = multiyear_approach(frame, atr, cfg)
+        out.darvas = detect_darvas(frame, cfg, symbol=symbol)
     out.shocks = volume_shocks(frame, timeframe, atr, ema20, ema50, cfg, since=n - cfg.vs_store_bars)
     out.volume_state = latest_volume_state(frame, timeframe, cfg)
     return out

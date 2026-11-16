@@ -170,8 +170,14 @@ def test_stage2_confirmed_breakout_with_volume_and_positive_rs():
     m = r["metrics"]
     assert r["stage"] == "stage2_confirmed", r["reasons"]
     assert m["close"] > m["base_high"] and m["volume_expansion"] and m["rs"] > 0 and m["base_range_pct"] <= 30
-    # current candle excluded from the previous base resistance (s.10 rule 6)
-    assert m["base_high"] == pytest.approx(float(weekly(c, v)["high"].iloc[-53:-1].max()), abs=0.01)  # metrics rounded to 2 dp
+    # current candle excluded from the previous base resistance (s.10 rule 6); 1.4.0: the base is the
+    # variable-length stretch reported in base_start_week .. the previous week
+    w = weekly(c, v)
+    start = w.index.get_loc(pd.Timestamp(m["base_start_week"]))
+    assert m["base_high"] == pytest.approx(float(w["high"].iloc[start:-1].max()), abs=0.01)  # metrics rounded to 2 dp
+    assert m["base_duration_weeks"] == len(w) - 1 - start and m["base_duration_weeks"] >= 52
+    fixed = evaluate(w, flat_bench(len(c)), StageConfig(base_mode="fixed"))["metrics"]
+    assert fixed["base_high"] == pytest.approx(float(w["high"].iloc[-53:-1].max()), abs=0.01)  # s.2 literal mode kept
     assert r["stage_since"] == weekly(c, v).index[-1].isoformat() and r["previous_stage"] != "stage2_confirmed"
 
 
@@ -206,18 +212,28 @@ def test_wide_range_is_not_a_base():
     wide = 120 + 30 * np.sin(np.arange(80) / 3.0)  # 90..150: > 30 % range
     c = np.concatenate([up, wide])
     r = evaluate(weekly(c), flat_bench(len(c)), CFG)
-    assert r["stage"] == "other" and r["metrics"]["base_range_pct"] > 30
+    # 1.4.0 variable base: no stretch inside the 30 % band lasts the minimum 26 weeks
+    assert r["stage"] == "other" and r["metrics"]["base_duration_weeks"] < CFG.min_base_weeks
+    assert next(g for g in r["gates"] if g["name"] == "base_range")["passed"] is False
+    fixed = evaluate(weekly(c), flat_bench(len(c)), StageConfig(base_mode="fixed"))
+    assert fixed["stage"] == "other" and fixed["metrics"]["base_range_pct"] > 30
 
 
 def test_boundaries_inclusive():
     c = base_path(115.0)
-    ss = compute_stage_series(weekly(c), flat_bench(len(c)), CFG)
+    fx = StageConfig(base_mode="fixed")  # s.2 literal window: the range threshold is the boundary
+    ss = compute_stage_series(weekly(c), flat_bench(len(c)), fx)
     i = len(c) - 1
-    exact = StageConfig(max_base_range_pct=float(ss.base_range_pct[i]), ema_testing_band_pct=abs(float(ss.ema_dist_pct[i])))
+    exact = StageConfig(base_mode="fixed", max_base_range_pct=float(ss.base_range_pct[i]), ema_testing_band_pct=abs(float(ss.ema_dist_pct[i])))
     ss2 = compute_stage_series(weekly(c), flat_bench(len(c)), exact)
     assert ss2.conditions["range_ok"][i] and ss2.conditions["testing"][i]  # <= on the boundary
-    tighter = StageConfig(max_base_range_pct=float(ss.base_range_pct[i]) - 1e-6)
+    tighter = StageConfig(base_mode="fixed", max_base_range_pct=float(ss.base_range_pct[i]) - 1e-6)
     assert not compute_stage_series(weekly(c), flat_bench(len(c)), tighter).conditions["range_ok"][i]
+    # variable mode (1.4.0): the minimum base length is the boundary (>=)
+    sv = compute_stage_series(weekly(c), flat_bench(len(c)), CFG)
+    d = int(sv.base_weeks[i])
+    assert compute_stage_series(weekly(c), flat_bench(len(c)), StageConfig(min_base_weeks=d)).conditions["range_ok"][i]
+    assert not compute_stage_series(weekly(c), flat_bench(len(c)), StageConfig(min_base_weeks=d + 1)).conditions["range_ok"][i]
 
 
 def test_prior_decline_assumption_is_flagged_and_configurable():
@@ -340,3 +356,105 @@ def test_decline_volume_is_ignored_and_base_volume_trend_reported():
     m = evaluate(w, b, CFG)["metrics"]
     assert m["setup_met"] is True and m["base_volume_trend"] is not None
 
+
+
+# ---------------------------------------------------------------- 1.4.0 variable-length base (user request 2026-11-15)
+def test_variable_base_finds_a_base_younger_than_the_fixed_window():
+    """A 35-week base right after a decline: the fixed 52-week window reaches back into the
+    decline (range > 30 %); the variable base finds it when 26 weeks are enough (1.4.0), and
+    1.5.0's 52-week minimum (user, 2026-11-16) rejects it as too short."""
+    up = np.linspace(100, 200, 60)
+    down = np.linspace(200, 105, 21)[1:]
+    base = 115 + 8 * np.sin(np.arange(35) / 3.0)
+    c = np.concatenate([up, down, base, [118.0]])
+    w, b = weekly(c), flat_bench(len(c))
+    fixed = evaluate(w, b, StageConfig(base_mode="fixed", max_base_range_pct=30.0))
+    assert next(g for g in fixed["gates"] if g["name"] == "base_range")["passed"] is False
+    var = evaluate(w, b, StageConfig(min_base_weeks=26, max_base_range_pct=30.0))
+    g = next(g for g in var["gates"] if g["name"] == "base_range")
+    assert g["passed"] is True and g["basis"] == "user"
+    m = var["metrics"]
+    assert 26 <= m["base_duration_weeks"] <= 40 and m["base_range_pct"] <= 30 and m["base_mode"] == "variable"
+    assert m["prior_decline_pct"] >= CFG.prior_decline_min_pct  # measured before the base start
+    now = evaluate(w, b, CFG)  # 1.5.0 default: a base needs 52 weeks
+    assert next(g for g in now["gates"] if g["name"] == "base_range")["passed"] is False and now["stage"] == "other"
+
+
+def test_variable_base_drops_the_entry_leg_of_the_decline():
+    c = base_path(115.0)
+    w = weekly(c)
+    m = evaluate(w, flat_bench(len(c)), CFG)["metrics"]
+    base_only = w["high"].iloc[80:-1].max()  # the oscillating range, not the decline weeks
+    assert m["base_high"] == pytest.approx(float(base_only), abs=0.01)
+    assert m["base_high"] < 130  # the decline weeks that still fit the 30 % band (up to ~135) are not the resistance
+
+
+def test_variable_bases_match_a_brute_force_search():
+    from app.stage.analysis import variable_bases
+
+    rng = np.random.default_rng(7)
+    h = 100 * np.exp(np.cumsum(rng.normal(0, 0.04, 400)))
+    l = h * (1 - rng.uniform(0.0, 0.06, 400))
+    bh, bl, st = variable_bases(h, l, 30.0, 520)
+    for e in range(0, 400, 7):
+        s = e
+        while s - 1 >= 0 and (max(h[s - 1 : e + 1]) - min(l[s - 1 : e + 1])) / min(l[s - 1 : e + 1]) * 100 <= 30.0:
+            s -= 1
+        if (h[e] - l[e]) / l[e] * 100 > 30.0:
+            assert st[e] == e + 1
+            continue
+        t = s
+        while t < e and h[t] > max(h[t + 1 : e + 1]):
+            t += 1
+        assert st[e] == t and bh[e] == pytest.approx(max(h[t : e + 1])) and bl[e] == pytest.approx(min(l[t : e + 1]))
+
+
+def test_variable_base_uses_no_later_weeks():
+    c = base_path(135.0)
+    v = np.full(len(c), 1e5)
+    v[-1] = 1e6
+    full = compute_stage_series(weekly(c, v), flat_bench(len(c)), CFG)
+    for m in (100, 130, len(c) - 1):
+        part = compute_stage_series(weekly(c[:m], v[:m]), flat_bench(len(c))[:m], CFG)
+        np.testing.assert_array_equal(part.base_weeks, full.base_weeks[:m])
+        np.testing.assert_allclose(part.base_high, full.base_high[:m], equal_nan=True)
+
+
+def test_one_huge_week_means_no_base_not_missing_history():
+    c = base_path(115.0)
+    w = weekly(c)
+    w.iloc[-2, w.columns.get_loc("high")] = w["low"].iloc[-2] * 1.5  # the previous week alone spans 50 %
+    r = evaluate(w, flat_bench(len(c)), CFG)
+    assert r["stage"] == "other" and r["metrics"]["base_duration_weeks"] == 0
+
+
+# ---------------------------------------------------------------- 1.5.0 (user, 2026-11-16): 52-week base, 30-40 % band, targets
+def test_1_5_0_defaults_are_the_users_choice():
+    assert (CFG.min_base_weeks, CFG.max_base_range_pct, CFG.tight_base_range_pct) == (52, 40.0, 30.0)
+    assert CFG.ema_period == 30 and CFG.rs_length_weekly == 52  # 30-week EMA and the RS Line are unchanged
+
+
+def test_tight_and_wide_bases_and_targets():
+    c = base_path(115.0)  # 60-week base oscillating 105..125 (~21 %): tight
+    m = evaluate(weekly(c), flat_bench(len(c)), CFG)["metrics"]
+    assert m["base_tightness"] == "tight" and m["base_duration_weeks"] >= 52 and m["tight_base_weeks"] >= 52  # also a 52-week base inside 30 %
+    hi, lo, close = m["base_high"], m["base_low"], m["close"]
+    assert m["target_base_height"] == pytest.approx(hi + (hi - lo), abs=0.02)
+    assert m["target_base_height_pct"] == pytest.approx(((hi + (hi - lo)) / close - 1) * 100, abs=0.05)
+    peak = m["swing_rule_peak"]
+    assert peak is not None and peak > hi and m["target_swing_rule"] == pytest.approx(peak + (peak - lo), abs=0.02)
+    # a 35 % wide base: inside the 40 % band, labelled wide
+    up = np.linspace(100, 200, 60)
+    down = np.linspace(200, 100, 21)[1:]
+    wide = 112 + 15 * np.sin(np.arange(60) / 3.0)  # ~97..127 with wicks: ~33 %
+    c2 = np.concatenate([up, down, wide, [115.0]])
+    m2 = evaluate(weekly(c2), flat_bench(len(c2)), CFG)["metrics"]
+    assert 30 < m2["base_range_pct"] <= 40 and m2["base_tightness"] == "wide" and m2["tight_base_weeks"] < 52
+
+
+def test_no_targets_without_a_valid_base():
+    up = np.linspace(100, 200, 60)
+    wide = 120 + 30 * np.sin(np.arange(80) / 3.0)
+    c = np.concatenate([up, wide])
+    m = evaluate(weekly(c), flat_bench(len(c)), CFG)["metrics"]
+    assert m["base_tightness"] is None and m["target_base_height"] is None and m["target_swing_rule"] is None

@@ -96,7 +96,65 @@ class StageSeries:
     vol_base_trend: np.ndarray  # avg of the later 26 / earlier 26 of those weeks (< 1 = volume drying up)
     rs: RSLine
     stage: np.ndarray  # object array of stage keys
+    base_weeks: np.ndarray = field(default_factory=lambda: np.array([]))  # 1.4.0: length of the base before each week
+    base_start: np.ndarray = field(default_factory=lambda: np.array([], dtype=int))  # 1.4.0: index of its first week (-1 = none)
+    tight_base_weeks: np.ndarray = field(default_factory=lambda: np.array([]))  # 1.5.0: base length inside the tight band
     conditions: dict[str, np.ndarray] = field(default_factory=dict)
+
+
+def variable_bases(high: np.ndarray, low: np.ndarray, band_pct: float, cap: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """For every week e: the longest stretch of weeks s..e whose range stays inside one band
+    ((max high - min low) / min low x 100 <= band_pct), at most ``cap`` weeks, without its
+    entry leg. Returns (base high, base low, start); start = e + 1 (empty, NaN high / low)
+    when week e alone is wider than the band.
+
+    Entry leg: the stretch would otherwise begin with the last weeks of the decline into the
+    base (they are inside the band, but each is higher than every later week), and the base
+    high would be a decline week near low x (1 + band) instead of a resistance the range
+    tested. Leading weeks whose high is above every later high of the stretch are dropped.
+    O(n): the band start never moves backwards (two monotonic deques; the dropped leading
+    weeks are exactly the leading run of consecutive indices in the max-deque). Uses weeks
+    <= e only, so the base of week i (weeks before i) never reads the future."""
+    from collections import deque
+
+    n = len(high)
+    bh = np.full(n, np.nan)
+    bl = np.full(n, np.nan)
+    st = np.zeros(n, dtype=int)
+    dmax: deque[int] = deque()
+    dmin: deque[int] = deque()
+    s = 0
+    for e in range(n):
+        while dmax and high[dmax[-1]] <= high[e]:
+            dmax.pop()
+        dmax.append(e)
+        while dmin and low[dmin[-1]] >= low[e]:
+            dmin.pop()
+        dmin.append(e)
+        s = max(s, e - cap + 1)
+        while True:
+            while dmax[0] < s:
+                dmax.popleft()
+            while dmin[0] < s:
+                dmin.popleft()
+            hi, lo = high[dmax[0]], low[dmin[0]]
+            if lo > 0 and (hi - lo) / lo * 100.0 <= band_pct:
+                # drop the entry leg: leading weeks s, s+1, ... that are each above every later high
+                k = 0
+                while k + 1 < len(dmax) and dmax[k] == s + k:
+                    k += 1
+                t = s + k
+                lo_t = next(low[j] for j in dmin if j >= t)
+                st[e], bh[e], bl[e] = t, high[dmax[k]], lo_t
+                break
+            if s >= e:  # this single week is wider than the band: no base ends here
+                st[e] = e + 1
+                s = e + 1
+                dmax.clear()
+                dmin.clear()
+                break
+            s += 1
+    return bh, bl, st
 
 
 def compute_stage_series(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: StageConfig) -> StageSeries:
@@ -110,16 +168,35 @@ def compute_stage_series(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: Sta
         ema_dist = (c / ema30 - 1.0) * 100.0
         ema_prev = pd.Series(ema30).shift(cfg.ema_direction_lookback).to_numpy()
         ema_change = (ema30 / ema_prev - 1.0) * 100.0
-    # s.2: previous base (current candle excluded)
-    base_high = _roll(h, L, "max", 1)
-    base_low = _roll(l, L, "min", 1)
+    P = cfg.prior_decline_lookback_weeks
+    if cfg.base_mode == "variable":
+        # USER (2026-11-15, StageConfig 1.4.0): the base is the longest stretch of weeks before
+        # the current one that stays inside the max_base_range_pct band; it must last at least
+        # min_base_weeks. The prior decline is measured before the base starts (a 52-week window
+        # that reaches back into the decline no longer hides a younger base).
+        bh, bl, st = variable_bases(h, l, cfg.max_base_range_pct, cfg.max_base_weeks)
+        base_high = np.concatenate([[np.nan], bh[:-1]]) if n else bh
+        base_low = np.concatenate([[np.nan], bl[:-1]]) if n else bl
+        start = np.concatenate([[-1], st[:-1]]) if n else st
+        base_weeks = np.where(start >= 0, np.arange(n) - start, 0).astype(float)
+        rmax = pd.Series(h).rolling(P, min_periods=min(4, P)).max().to_numpy()
+        prior_high = np.array([rmax[s - 1] if s >= 1 else np.nan for s in start], dtype=float) if n else np.array([])
+        # 1.5.0 label: is there also a base of >= min_base_weeks inside the tighter band (tight)?
+        _, _, st_t = variable_bases(h, l, cfg.tight_base_range_pct, cfg.max_base_weeks)
+        start_t = np.concatenate([[-1], st_t[:-1]]) if n else st_t
+        tight_weeks = np.where(start_t >= 0, np.arange(n) - start_t, 0).astype(float)
+    else:
+        # s.2 literal: previous base = the fixed 52-week window (current candle excluded)
+        base_high = _roll(h, L, "max", 1)
+        base_low = _roll(l, L, "min", 1)
+        start = np.arange(n) - L
+        base_weeks = np.full(n, float(L))
+        tight_weeks = np.full(n, np.nan)
+        # ASSUMPTION: prior high = max high of the weeks before the base window (available weeks, >= 4).
+        prior_high = pd.Series(h).rolling(P, min_periods=min(4, P)).max().shift(L + 1).to_numpy()
     with np.errstate(divide="ignore", invalid="ignore"):
         base_range = (base_high - base_low) / base_low * 100.0
         proximity = (base_high - c) / base_high * 100.0
-    # ASSUMPTION: prior high = max high of the weeks before the base window (available weeks, >= 4).
-    P = cfg.prior_decline_lookback_weeks
-    prior_high = pd.Series(h).rolling(P, min_periods=min(4, P)).max().shift(L + 1).to_numpy()
-    with np.errstate(divide="ignore", invalid="ignore"):
         prior_decline = (prior_high - base_low) / prior_high * 100.0
     # s.5 volume (the current, completed week included in "recent")
     B, R = cfg.volume_base_weeks, cfg.volume_recent_weeks
@@ -142,7 +219,7 @@ def compute_stage_series(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: Sta
         ema_falling = ema_change < -tol
         testing = np.abs(ema_dist) <= cfg.ema_testing_band_pct
         above = c > ema30
-        range_ok = base_range <= cfg.max_base_range_pct
+        range_ok = (base_range <= cfg.max_base_range_pct) & (base_weeks >= (cfg.min_base_weeks if cfg.base_mode == "variable" else 0))
         decline_ok = prior_decline >= cfg.prior_decline_min_pct
         base_valid = range_ok & decline_ok
         breakout = c > base_high
@@ -161,13 +238,17 @@ def compute_stage_series(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: Sta
     stage[s1] = "stage1"
     stage[e2] = "early_stage2"
     stage[s2] = "stage2_confirmed"
-    insufficient = (np.arange(n) < min_hist - 1) | ~np.isfinite(base_high) | ~np.isfinite(rs.res)
+    # variable mode: a missing base (the previous week alone wider than the band) means 'no base'
+    # (range_ok False -> Other), not missing history
+    no_base_level = ~np.isfinite(base_high) if cfg.base_mode != "variable" else np.zeros(n, dtype=bool)
+    insufficient = (np.arange(n) < min_hist - 1) | no_base_level | ~np.isfinite(rs.res)
     stage[insufficient] = "insufficient_history"
     setup = base_valid & above & rs_pos & near_or_breakout & volume_pickup & ~insufficient
     return StageSeries(
         times=weekly.index, close=c, high=h, low=l, volume=v, ema30=ema30, ema_dist_pct=ema_dist, ema_change_pct=ema_change,
         base_high=base_high, base_low=base_low, base_range_pct=base_range, proximity_pct=proximity, prior_high=prior_high,
         prior_decline_pct=prior_decline, vol_recent26=vr, vol_prev26=vp, vol_last4=v4, vol_base=vb, vol_base_trend=vbt, rs=rs, stage=stage,
+        base_weeks=base_weeks, base_start=np.asarray(start, dtype=int), tight_base_weeks=tight_weeks,
         conditions={
             "ema_rising": ema_rising, "ema_falling": ema_falling, "testing": testing, "above": above, "range_ok": range_ok,
             "decline_ok": decline_ok, "base_valid": base_valid, "breakout": breakout, "approaching": approaching, "rs_pos": rs_pos,
@@ -179,7 +260,7 @@ def compute_stage_series(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: Sta
 
 def _higher_lows(ss: StageSeries, i: int, cfg: StageConfig) -> bool | None:
     """ASSUMPTION: the last two confirmed weekly swing lows inside the base window rise."""
-    lo = max(0, i - cfg.base_lookback_weeks)
+    lo = max(0, int(ss.base_start[i])) if cfg.base_mode == "variable" and len(ss.base_start) > i else max(0, i - cfg.base_lookback_weeks)
     sp = swing_points(ss.high[: i + 1], ss.low[: i + 1], cfg.higher_lows_swing_k)
     lows = [j for j in sp.lows if lo <= j <= i]
     if len(lows) < 2:
@@ -201,6 +282,40 @@ def base_length(high: np.ndarray, low: np.ndarray, i: int, band_pct: float, cap:
     return d
 
 
+def targets(ss: StageSeries, i: int, cfg: StageConfig, base_ok: bool) -> dict[str, Any]:
+    """Display-only projections for a valid base (StageConfig 1.5.0; never used to classify).
+
+    * base-height target = BaseHigh + (BaseHigh - BaseLow): the base height projected above
+      the breakout level (classic measured move; height is the best size predictor in
+      Bulkowski's studies).
+    * swing-rule target (Weinstein, *Secrets*, ch. 6 "Measuring the Move") = prior peak +
+      (prior peak - base low), where the prior peak is the highest high of the weeks before
+      the base (the peak before the decline into it). Weinstein applies it once the stock
+      betters that old peak; reported only when the old peak is above the base high.
+    Base tightness: 'tight' when the stock also holds a base of >= min_base_weeks inside the
+    tighter tight_base_range_pct band (preferred), else 'wide' (the longest stretch fills the
+    wider band, so its own range says little). Approximations,
+    not forecasts."""
+    out: dict[str, Any] = {"base_tightness": None, "tight_base_weeks": None, "target_base_height": None, "target_base_height_pct": None, "target_swing_rule": None, "target_swing_rule_pct": None, "swing_rule_peak": None}
+    hi, lo, c = float(ss.base_high[i]), float(ss.base_low[i]), float(ss.close[i])
+    if not base_ok or not (np.isfinite(hi) and np.isfinite(lo) and lo > 0 and c > 0):
+        return out
+    tw = float(ss.tight_base_weeks[i]) if len(ss.tight_base_weeks) > i and np.isfinite(ss.tight_base_weeks[i]) else None
+    if tw is None:  # fixed mode: the 52-week window's own range
+        out["base_tightness"] = "tight" if (hi - lo) / lo * 100.0 <= cfg.tight_base_range_pct else "wide"
+    else:
+        out["base_tightness"] = "tight" if tw >= cfg.min_base_weeks else "wide"
+        out["tight_base_weeks"] = int(tw)
+    t1 = hi + (hi - lo)
+    out["target_base_height"], out["target_base_height_pct"] = _f(t1, 2), _f((t1 / c - 1.0) * 100.0, 2)
+    peak = float(ss.prior_high[i]) if np.isfinite(ss.prior_high[i]) else None
+    if peak is not None and peak > hi:
+        t2 = peak + (peak - lo)
+        out["swing_rule_peak"] = _f(peak, 2)
+        out["target_swing_rule"], out["target_swing_rule_pct"] = _f(t2, 2), _f((t2 / c - 1.0) * 100.0, 2)
+    return out
+
+
 def _gate(stage: str, name: str, value: Any, rule: str, passed: Any, source: str = "source") -> dict[str, Any]:
     p = None if passed is None or (isinstance(passed, float) and not math.isfinite(passed)) else bool(passed)
     return {"stage": stage, "name": name, "value": value, "rule": rule, "passed": p, "basis": source}
@@ -220,7 +335,7 @@ def evaluate(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: StageConfig) ->
         contraction_ratio = ss.vol_recent26[i] / ss.vol_prev26[i]
         expansion_ratio = ss.vol_last4[i] / ss.vol_recent26[i]
     hl = _higher_lows(ss, i, cfg) if i > 0 else None
-    duration = base_length(ss.high, ss.low, i, cfg.max_base_range_pct)
+    duration = int(ss.base_weeks[i]) if cfg.base_mode == "variable" else base_length(ss.high, ss.low, i, cfg.max_base_range_pct)
     ema_dir = "rising" if cond["ema_rising"] else "falling" if cond["ema_falling"] else ("flat" if np.isfinite(ss.ema_change_pct[i]) else None)
     ema_pos = None
     if np.isfinite(ss.ema30[i]):
@@ -232,9 +347,15 @@ def evaluate(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: StageConfig) ->
     prev_stage = str(ss.stage[since - 1]) if since > 0 else None
     rsv = st["rs"]
     T = cfg
+    variable = cfg.base_mode == "variable"
+    base_rule = (
+        f"longest stretch of weeks before this one inside a {T.max_base_range_pct} % band ((BaseHigh - BaseLow) / BaseLow x 100), >= {T.min_base_weeks} weeks (now {duration})"
+        if variable
+        else f"(BaseHigh - BaseLow) / BaseLow x 100 <= {T.max_base_range_pct} (previous {T.base_lookback_weeks} weeks)"
+    )
     gates = [
-        _gate("base", "base_range", _f(ss.base_range_pct[i], 2), f"(BaseHigh - BaseLow) / BaseLow x 100 <= {T.max_base_range_pct} (previous {T.base_lookback_weeks} weeks)", cond["range_ok"]),
-        _gate("base", "prior_decline", _f(ss.prior_decline_pct[i], 2), f"decline from the prior high to the base low >= {T.prior_decline_min_pct} %", cond["decline_ok"] if np.isfinite(ss.prior_decline_pct[i]) else None, "assumption"),
+        _gate("base", "base_range", _f(ss.base_range_pct[i], 2), base_rule, cond["range_ok"], "user" if variable else "source"),
+        _gate("base", "prior_decline", _f(ss.prior_decline_pct[i], 2), f"decline from the prior high ({T.prior_decline_lookback_weeks} weeks before the base{' start' if variable else ' window'}) to the base low >= {T.prior_decline_min_pct} %", cond["decline_ok"] if np.isfinite(ss.prior_decline_pct[i]) else None, "assumption"),
         _gate("stage2_confirmed", "breakout", _f(ss.close[i], 2), f"weekly close > previous base resistance {_f(ss.base_high[i], 2)} (current candle excluded)", cond["breakout"]),
         _gate("stage2_confirmed", "volume_support", _f(expansion_ratio, 3), f"last {T.volume_recent_weeks}-week avg volume >= {T.volume_expansion_ratio} x {T.volume_base_weeks}-week avg", cond["vol_expansion"] if vol_ok else None),
         _gate("stage2_confirmed", "rs_positive", rsv, "RS > 0", cond["rs_pos"] if rsv is not None else None),
@@ -246,13 +367,14 @@ def evaluate(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: StageConfig) ->
         _gate("stage1", "testing_ema", _f(ss.ema_dist_pct[i], 2), f"|close / 30W EMA - 1| x 100 <= {T.ema_testing_band_pct}", cond["testing"]),
         # Your entry setup (confluence): every check must pass.
         _gate("setup", "major_decline", _f(ss.prior_decline_pct[i], 2), f"decline into the base >= {T.prior_decline_min_pct} %", cond["decline_ok"] if np.isfinite(ss.prior_decline_pct[i]) else None, "user"),
-        _gate("setup", "long_base", duration, f"base held inside a {T.max_base_range_pct} % band for >= {T.base_lookback_weeks} weeks (longer preferred)", cond["range_ok"], "user"),
+        _gate("setup", "long_base", duration, f"base held inside a {T.max_base_range_pct} % band for >= {T.min_base_weeks if variable else T.base_lookback_weeks} weeks (longer preferred)", cond["range_ok"], "user"),
         _gate("setup", "price_above_ema", _f(ss.ema_dist_pct[i], 2), f"close > 30W EMA {_f(ss.ema30[i], 2)}", cond["above"], "user"),
         _gate("setup", "rs_positive", rsv, "RS > 0 (green)", cond["rs_pos"] if rsv is not None else None, "user"),
         _gate("setup", "near_or_breaking_out", _f(ss.proximity_pct[i], 2), f"(BaseHigh - close) / BaseHigh x 100 <= {T.base_high_proximity_pct} (negative = above the base high)", cond["near_or_breakout"], "user"),
         _gate("setup", "volume_high_vs_base", _f(ss.vol_last4[i] / ss.vol_base[i] if np.isfinite(ss.vol_base[i]) and ss.vol_base[i] > 0 else np.nan, 3), f"last {T.volume_recent_weeks}-week avg volume >= {T.setup_volume_pickup_ratio} x avg of the {T.base_lookback_weeks} sideways weeks before them", cond["volume_pickup"] if np.isfinite(ss.vol_base[i]) and np.isfinite(ss.vol_last4[i]) else None, "user"),
     ]
     setup_met = stage != "insufficient_history" and all(g["passed"] is True for g in gates if g["stage"] == "setup")
+    tg = targets(ss, i, cfg, bool(cond["range_ok"]))
     reasons = _explain(stage, gates, cond, st, cfg)
     setup_gates = [g for g in gates if g["stage"] == "setup"]
     if stage != "insufficient_history":
@@ -271,6 +393,9 @@ def evaluate(weekly: pd.DataFrame, bench_weekly: pd.Series, cfg: StageConfig) ->
         "base_support": _f(ss.base_low[i], 2),
         "base_range_pct": _f(ss.base_range_pct[i], 2),
         "base_duration_weeks": duration,
+        "base_start_week": iso(ss.times[int(ss.base_start[i])]) if 0 <= int(ss.base_start[i]) < len(ss.times) else None,
+        "base_mode": cfg.base_mode,
+        **tg,
         "setup_met": setup_met,
         "setup_failed": [g["name"] for g in gates if g["stage"] == "setup" and g["passed"] is not True],
         "setup_checks": sum(1 for g in gates if g["stage"] == "setup"),

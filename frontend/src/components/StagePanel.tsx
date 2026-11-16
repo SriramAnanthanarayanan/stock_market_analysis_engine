@@ -1,4 +1,4 @@
-import type { RSLinePayload, StageDetail, StageGate } from "../api/types";
+import type { RSLinePayload, StageDetail, StageGate, StageMetrics } from "../api/types";
 import { fmtDate, fmtNum, humanize } from "../lib/format";
 import { KV, Panel } from "./common";
 
@@ -36,6 +36,18 @@ export function GateList({ gates }: { gates: StageGate[] }) {
   );
 }
 
+/** Base window, tight / wide label and the display-only targets (StageConfig 1.5.0). */
+export function StageBaseTargets({ m }: { m: StageMetrics }) {
+  return (
+    <div className="mb-2" data-testid="stage-base-targets">
+      <KV k="Base" v={`${m.base_duration_weeks ?? "-"} weeks${m.base_start_week ? ` since ${String(m.base_start_week).slice(0, 10)}` : ""} · ${fmtNum(m.base_range_pct, 1)}%`} />
+      <KV k="Tight / wide" v={m.base_tightness ? `${m.base_tightness} (${m.tight_base_weeks ?? "-"} weeks inside 30%)` : "no valid base"} title="Tight = the stock also holds a base of 52+ weeks inside a 30% band (preferred); wide = only inside the 40% band" />
+      <KV k="Target: base height" v={m.target_base_height == null ? "-" : `${fmtNum(m.target_base_height)} (${fmtNum(m.target_base_height_pct, 1)}% from close)`} title="Base high + (base high - base low). Display only - an approximation, not a forecast." />
+      <KV k="Target: Weinstein swing rule" v={m.target_swing_rule == null ? "-" : `${fmtNum(m.target_swing_rule)} (${fmtNum(m.target_swing_rule_pct, 1)}%; old peak ${fmtNum(m.swing_rule_peak)})`} title="Old peak + (old peak - base low); Weinstein applies it once price betters the old peak. Display only." />
+    </div>
+  );
+}
+
 export function StagePanel({ stage, rs }: { stage: StageDetail | null; rs: RSLinePayload | null }) {
   if (!stage) return null;
   const m = stage.metrics;
@@ -53,8 +65,10 @@ export function StagePanel({ stage, rs }: { stage: StageDetail | null; rs: RSLin
           {stage.previous_stage ? ` (from ${humanize(stage.previous_stage)})` : ""} · latest completed week {fmtDate(m.week as string)}
         </div>
         <KV k="30W EMA / distance / direction" v={`${fmtNum(m.ema30)} / ${fmtNum(m.ema30_distance_pct, 2)}% / ${m.ema30_direction ?? "-"}`} />
-        <KV k="Base high / low (52W, current week excluded)" v={`${fmtNum(m.base_high)} / ${fmtNum(m.base_low)}`} />
-        <KV k="Base range / length" v={`${fmtNum(m.base_range_pct, 2)}% / ${m.base_duration_weeks ?? "-"} weeks`} />
+        <KV k="Base high / low (current week excluded)" v={`${fmtNum(m.base_high)} / ${fmtNum(m.base_low)}`} />
+        <KV k="Base range / length" v={`${fmtNum(m.base_range_pct, 2)}% ${m.base_tightness ? `(${m.base_tightness}) ` : ""}/ ${m.base_duration_weeks ?? "-"} weeks${m.base_start_week ? ` since ${String(m.base_start_week).slice(0, 10)}` : ""}`} />
+        <KV k="Target: base height (display only)" v={m.target_base_height == null ? "-" : `${fmtNum(m.target_base_height)} (${fmtNum(m.target_base_height_pct, 1)}% from close)`} title="Base high + (base high - base low): the base height projected above the breakout level. An approximation, not a forecast." />
+        <KV k="Target: Weinstein swing rule" v={m.target_swing_rule == null ? "-" : `${fmtNum(m.target_swing_rule)} (${fmtNum(m.target_swing_rule_pct, 1)}%; old peak ${fmtNum(m.swing_rule_peak)})`} title="Old peak + (old peak - base low). Weinstein applies it once price betters the old peak. An approximation, not a forecast." />
         <KV k="Volume: last 4W vs sideways base" v={`${fmtNum(m.volume_pickup_ratio, 2)}x (needs 1.5x)`} />
         <KV k="Base volume trend (later / earlier half)" v={`${fmtNum(m.base_volume_trend, 2)}x ${m.base_volume_drying_up ? "(drying up)" : m.base_volume_drying_up === false ? "(not drying up)" : ""}`} />
         <KV k="Distance to breakout" v={`${fmtNum(m.distance_to_breakout_pct, 2)}%`} />

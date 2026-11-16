@@ -5,9 +5,10 @@ import { api } from "../api/client";
 import type { StageList, StageRow } from "../api/types";
 import { ErrorNote, FnoBadge, Panel } from "../components/common";
 import { DataTable, type Column } from "../components/DataTable";
-import { GateList, STAGE_COLOR } from "../components/StagePanel";
+import { GateList, STAGE_COLOR, StageBaseTargets } from "../components/StagePanel";
 import { Field } from "../components/TechScanHeader";
 import { fmtDate, fmtNum, humanize } from "../lib/format";
+import { useOnScanFinished } from "../lib/scanActivity";
 import { UNIVERSES } from "../lib/status";
 
 const yesNo = (v: boolean | null | undefined) => (v === null || v === undefined ? <span className="text-muted">n/a</span> : v ? <span className="text-validated">yes</span> : <span className="text-muted">no</span>);
@@ -25,6 +26,9 @@ export function StageAnalysis() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<StageRow | null>(null);
+  // Reload after a background weekly scan (startup / scheduler) has finished.
+  const [tick, setTick] = useState(0);
+  useOnScanFinished("1w", asof || null, () => setTick((x) => x + 1));
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
   const set = (patch: Record<string, string>) => {
     const next = new URLSearchParams(params);
@@ -38,7 +42,7 @@ export function StageAnalysis() {
       .then((r) => (setData(r), setError(null)))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [instrument, universe, stage, rs, asof, setupOnly]);
+  }, [instrument, universe, stage, rs, asof, setupOnly, tick]);
   const open = (r: StageRow) =>
     openChart({
       symbol: r.symbol,
@@ -68,9 +72,16 @@ export function StageAnalysis() {
     { key: "since", label: "Since", render: (r) => <span className="text-muted">{fmtDate(r.stage_since)}</span>, sort: (r) => r.stage_since ?? "" },
     { key: "ema", label: "30W EMA", align: "right", render: (r) => fmtNum(r.metrics.ema30), sort: (r) => r.metrics.ema30 ?? null },
     { key: "emadir", label: "EMA dir", render: (r) => r.metrics.ema30_direction ?? "-" },
-    { key: "range", label: "Base range %", align: "right", render: (r) => fmtNum(r.metrics.base_range_pct, 1), sort: (r) => r.metrics.base_range_pct ?? null },
+    { key: "range", label: "Base range %", align: "right", render: (r) => (
+        <span title={r.metrics.base_tightness ? `${r.metrics.base_tightness}: ${r.metrics.tight_base_weeks ?? "-"} weeks inside a 30% band (tight = 52+)` : "no valid base"}>
+          {fmtNum(r.metrics.base_range_pct, 1)}
+          {r.metrics.base_tightness ? <span className={`ml-1 text-[10px] ${r.metrics.base_tightness === "tight" ? "text-validated" : "text-forming"}`}>{r.metrics.base_tightness}</span> : null}
+        </span>
+      ), sort: (r) => r.metrics.base_range_pct ?? null },
     { key: "res", label: "Base resistance", align: "right", render: (r) => fmtNum(r.metrics.base_high), sort: (r) => r.metrics.base_high ?? null },
     { key: "dist", label: "To breakout %", align: "right", render: (r) => fmtNum(r.metrics.distance_to_breakout_pct, 2), sort: (r) => r.metrics.distance_to_breakout_pct ?? null },
+    { key: "tgt", label: "Target (height)", align: "right", render: (r) => (r.metrics.target_base_height == null ? "-" : <span title="Base high + base height (measured move). Display only - an approximation, not a forecast.">{fmtNum(r.metrics.target_base_height)} <span className="text-[10px] text-muted">{fmtNum(r.metrics.target_base_height_pct, 0)}%</span></span>), sort: (r) => r.metrics.target_base_height_pct ?? null },
+    { key: "swing", label: "Target (swing)", align: "right", render: (r) => (r.metrics.target_swing_rule == null ? "-" : <span title={`Weinstein swing rule: old peak ${fmtNum(r.metrics.swing_rule_peak)} + (old peak - base low). Applies once price betters the old peak. Display only.`}>{fmtNum(r.metrics.target_swing_rule)} <span className="text-[10px] text-muted">{fmtNum(r.metrics.target_swing_rule_pct, 0)}%</span></span>), sort: (r) => r.metrics.target_swing_rule_pct ?? null },
     { key: "rs", label: "RS 52W", align: "right", render: (r) => <span className={(r.metrics.rs ?? 0) > 0 ? "text-validated" : "text-down"}>{fmtNum(r.metrics.rs, 3)}</span>, sort: (r) => r.metrics.rs ?? null },
     { key: "rsdir", label: "RS 5W", render: (r) => r.metrics.rs_trend ?? "-" },
     { key: "rsma", label: "RS 50 SMA", render: (r) => r.metrics.rs_sma_direction ?? "-" },
@@ -91,7 +102,7 @@ export function StageAnalysis() {
       <div className="panel flex flex-wrap items-end gap-3 px-3 py-2.5">
         <div className="mr-2">
           <h1 className="text-base font-semibold text-ink">Stage Analysis</h1>
-          <div className="text-[11px] text-muted">Your stage_analysis.txt rules with the rs_line.txt RS Line (weekly, RS 52 vs NIFTY 50, 30W EMA, 52-week base). Entry setup = major decline, long base (52+ weeks), above 30W EMA, RS &gt; 0, at/near the base high, last 4 weeks' volume &gt;= 1.5x the sideways base - all at once. Completed weekly candles only.</div>
+          <div className="text-[11px] text-muted">Your stage_analysis.txt rules with the rs_line.txt RS Line (weekly, RS 52 vs NIFTY 50, 30W EMA; base = longest stretch inside a 40% band (tight &lt;= 30%), 52+ weeks - StageConfig 1.5.0). Entry setup = major decline, long base (52+ weeks, longest first), above 30W EMA, RS &gt; 0, at/near the base high, last 4 weeks' volume &gt;= 1.5x the sideways base - all at once. Completed weekly candles only.</div>
         </div>
         <Field label="Instruments">
           <div className="flex gap-1">
@@ -158,6 +169,7 @@ export function StageAnalysis() {
                     <li key={r}>{r}</li>
                   ))}
                 </ul>
+                <StageBaseTargets m={detail.metrics} />
                 <GateList gates={detail.gates} />
                 <button className="btn mt-2 h-7" onClick={() => open(detail)} data-testid="stage-open-chart">
                   Open weekly chart with Stage overlays

@@ -55,7 +55,7 @@ def test_vcp_symbol_payload_from_scan(adv):
     r = client.get("/api/vcp/symbol", params={"symbol": "RWALK"}).json()
     assert r["source"] == "scan" and r["vcp"]["status"] == "breakout"
     g = r["vcp"]["geometry"]
-    assert g["schema_version"] == "vcp-2.0" and len(g["contractions"]) == 3 and g["pivot"]["p"] == r["vcp"]["pivot"]
+    assert g["schema_version"] == "vcp-3.0" and len(g["contractions"]) == 3 and g["pivot"]["p"] == r["vcp"]["pivot"]
     assert [c["label"] for c in r["vcp"]["contraction_list"]] == ["T1", "T2", "T3"]
     assert all(c["depth_pct"] > 0 and c["bars"] > 0 and c["median_volume"] and c["atr_range"] for c in r["vcp"]["contraction_list"])
     assert [c["final"] for c in r["vcp"]["contraction_list"]] == [False, False, True]

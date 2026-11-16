@@ -12,19 +12,24 @@ Schedules (initial defaults): 1H every 30 min, 4H every 2 h, 1D every 6 h,
 * Job IDs are fixed and ``replace_existing`` is set, so jobs are never
   duplicated; identical scans are also de-duplicated by the ScanManager.
 * Startup scans run in the order 1D, 1W, 4H, 1H, each only when needed.
+* After the close: a fixed weekday job one minute after the daily settle
+  (15:30 + ``daily_settle_minutes`` + 1 = 16:01 IST by default) ticks 1D and 1W,
+  so the new daily candle is downloaded right away rather than up to 6 hours
+  later (the interval jobs are anchored to the moment the app started).
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from .data.calendar import SESSION_CLOSE
 from .scanner import ScanRequest, find_latest_scan
 from .timeutil import IST, now_ist, parse_iso
 
@@ -45,6 +50,7 @@ class ScanScheduler:
             timezone=IST, job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 600}
         )
         self.last_decisions: dict[str, str] = {}
+        self._startup_pending: list[str] = []
 
     def start(self, run_startup_scans: bool = True) -> None:
         if self.scheduler.running:
@@ -58,6 +64,16 @@ class ScanScheduler:
         self.scheduler.add_job(
             self.refresh_universe, CronTrigger(day_of_week="mon-fri", hour=8, minute=30, timezone=IST), id="universe_refresh", replace_existing=True
         )
+        # Daily/weekly candle right after the close has settled (holidays: needs_scan skips).
+        at = self.after_close_time()
+        self.scheduler.add_job(
+            self.after_close, CronTrigger(day_of_week="mon-fri", hour=at.hour, minute=at.minute, timezone=IST), id="after_close", replace_existing=True
+        )
+        # F&O OI activity: NSE publishes the F&O / equity bhavcopy in the evening;
+        # retried every 30 minutes until the latest session is stored.
+        self.scheduler.add_job(
+            self.fno_refresh, CronTrigger(day_of_week="mon-fri", hour="18-23", minute="5,35", timezone=IST), id="fno_bhavcopy", replace_existing=True
+        )
         self.scheduler.start()
         if run_startup_scans:
             threading.Thread(target=self.startup_scans, name="startup-scans", daemon=True).start()
@@ -65,6 +81,12 @@ class ScanScheduler:
     def shutdown(self) -> None:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
+
+    def fno_refresh(self) -> None:
+        try:
+            self.last_decisions["fno_bhavcopy"] = f"{now_ist():%Y-%m-%d %H:%M} {self.s.fno.scheduled_refresh()}"
+        except Exception:
+            log.exception("F&O bhavcopy refresh failed")
 
     def status(self) -> dict[str, Any]:
         return {
@@ -118,7 +140,24 @@ class ScanScheduler:
         scan_id, _ = self.s.scans.submit(ScanRequest(universe=SCHEDULED_UNIVERSE, timeframe=timeframe, trigger="scheduler"))
         return scan_id
 
+    def after_close_time(self):
+        """Wall time (IST) of the after-close job: close + daily settle + 1 minute."""
+        base = datetime(2000, 1, 3, SESSION_CLOSE.hour, SESSION_CLOSE.minute)
+        return (base + timedelta(minutes=self.s.settings.daily_settle_minutes + 1)).time()
+
+    def after_close(self) -> None:
+        for tf in ("1d", "1w"):
+            try:
+                self.tick(tf)
+            except Exception:
+                log.exception("after-close tick %s failed", tf)
+
+    def startup_pending(self) -> list[str]:
+        """Startup timeframes not checked/scanned yet (the one running included)."""
+        return list(self._startup_pending)
+
     def startup_scans(self) -> None:
+        self._startup_pending = list(STARTUP_ORDER)
         for tf in STARTUP_ORDER:
             try:
                 need, why = self.needs_scan(tf)
@@ -129,12 +168,17 @@ class ScanScheduler:
                 self.s.scans.wait(scan_id)
             except Exception:
                 log.exception("startup scan %s failed", tf)
+            finally:
+                self._startup_pending = [x for x in self._startup_pending if x != tf]
 
     def refresh_universe(self) -> None:
         self.s.universe.refresh_nifty500()
         self.s.universe.refresh_fno()
         # official listing dates (IPO base scanner); a failure keeps the stored dates
         self.s.universe.refresh_listing_dates()
+        # recent mainboard IPOs (NSE past issues) - new listings join the next scans
+        self.s.universe.refresh_recent_ipos()
+        self.s.refresh_ipo_splits()
         if self.s.universe.refresh_holidays().get("status") == "ok":
             self.s.reload_calendar()
         # Official NSE 52-week high/low report of the last completed session (optional

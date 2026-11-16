@@ -93,3 +93,15 @@ A daily scan run before SignalConfig 1.2.0 has no multi-year evidence: the endpo
 * Provider history: Yahoo daily data from about 1996; early prints are cleaned (`docs/data-sources.md`) but a bad old high can still set a level - check the chart.
 * Demergers, mergers and ticker changes can cut a stock's history short, which shortens its bases.
 * The event study's survivorship bias (above) is structural: it can only be removed with point-in-time index membership, which the app does not have.
+
+## About to break out - SignalConfig 1.4.0 (2026-11-16)
+
+Your request: "a stock trading in a range for many years and about to break out".
+
+Tab **About to break out** on the page (`GET /api/scan/multiyear-approach`) lists stocks whose close is within 5 % below a resistance that has capped them for at least 1 year (any number of years selectable). For each it shows:
+- years in range and the resistance;
+- distance (Approaching, Very Near within 2 %, Touched);
+- separate tests (3+ highlighted);
+- lows rising, range depth, and all-time-high or "above it last on".
+
+The longest-capping level within reach wins. Stored as evidence `multiyear_approach` (kind `state`); the confluence trigger counts only real breakouts. Rules and live numbers: `docs/level-engine.md`.

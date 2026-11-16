@@ -40,7 +40,8 @@ def test_weekly_scan_persists_stage_results(e3):
     assert all(x["stage"] in ("stage1", "early_stage2", "stage2_confirmed", "other", "insufficient_history", "data_unavailable") for x in r["items"])
     assert [x["rank"] for x in r["items"]] == sorted(x["rank"] for x in r["items"])
     params = {p["name"]: p for p in r["config"]["parameters"]}
-    assert params["max_base_range_pct"]["basis"] == "source" and params["prior_decline_min_pct"]["basis"] == "assumption"
+    # 1.5.0: the base band is the user's own setting (40 %, s.2 said 30 %); the EMA period stays SOURCE
+    assert params["max_base_range_pct"]["basis"] == "user" and params["ema_period"]["basis"] == "source" and params["prior_decline_min_pct"]["basis"] == "assumption"
     assert r["config"]["sources"] == ["stage_analysis.txt", "rs_line.txt"]
 
 

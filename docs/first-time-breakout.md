@@ -64,3 +64,25 @@ Symbol, company, F&O, breakout type, previous 10-day high/low (the level), curre
 
 * Thresholds are initial engineering defaults; precision of the "fresh" definition is not validated with labelled charts.
 * A gap through the level counts like any close beyond it.
+
+## 10-day base rule - SignalConfig 1.3.0 (2026-11-15, your request)
+
+You asked that the 10-day level be a **base formed over 10 days, broken for the first time** (and caught before the break), not the recent candle high; the same for breakdowns. Hash `a864a585683e1f22`.
+
+A fresh 10-day crossing - and every About to Break Out state - now needs the reference window `i-10 .. i-1` to be a base:
+
+| Check | Rule | Parameter (ASSUMPTION) |
+|---|---|---|
+| Tight | window range <= 3.5 x ATR(14) of the candle before `i` | `fresh_base_max_range_atr` 3.5 |
+| Sideways | \|last close - first close\| of the window <= 2 x ATR | `fresh_base_max_drift_atr` 2.0 |
+| The level held | the top zone (within 0.5 ATR of the 10-day high; the S/R engine clusters within 0.5 ATR too) was first reached >= 3 sessions before `i` - a later poke a little higher is a test of the same top | `fresh_base_touch_zone_atr` 0.5, `fresh_base_min_level_age` 3 |
+
+Bearish mirrors it (bottom zone). Every event / setup row reports `base_valid`, `base_range_atr`, `base_drift_atr`, `base_level_age`, `base_tests` (candles in the zone) and `base_touch_span`. `fresh_require_base = false` restores the 1.2.0 rule. The E1 Breakout Scanner (every close beyond the level) is unchanged.
+
+Live effect (cached data of 2026-11-13): 10-day events over the last 20 sessions 379 -> 252 bullish, 317 -> 242 bearish; bullish About-to-Break-Out states (approaching / very near / touched) 31 -> 13. Last-candle bullish breakouts: 3 with the old rule, 4 now (AMBER, GVT&D, MMTC, POWERINDIA) - none dropped; the extra one appears because an earlier trend-leg "breakout" no longer opens an episode that suppressed the first real base break. A stair-step trend with 2-session pauses (each resumption a 1.2.0 breakout) is rejected. Charts were reviewed. Not validated on labelled charts.
+
+Planned next (phase 2): the shared level engine scores 3+ separate tests of a level and adds approach states for 52-week and multi-year levels.
+
+## Tests of the base top - SignalConfig 1.4.0
+
+Each 10-day setup row also reports `base_separate_tests` (zone candles at least 2 sessions apart) and `base_tests_score`. The About to Break Out setup quality has a new component **level_tests** (weight 10): 3+ separate tests rank higher. See `docs/level-engine.md`.

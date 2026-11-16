@@ -70,6 +70,12 @@ class MarketDataProvider(ABC):
     def default_periods(self, interval: str) -> list[str]:
         """Full-history periods to try in order (first = preferred)."""
 
+    def splits(self, symbol: str) -> dict[date, float] | None:
+        """Split / bonus ratios (new shares per old share) by ex-date, ``{}`` when
+        there were none, ``None`` when the provider cannot tell. Used only to put an
+        IPO issue price on the split-adjusted basis of the OHLC history."""
+        return None
+
 
 def empty_frame() -> pd.DataFrame:
     idx = pd.DatetimeIndex([], tz="Asia/Kolkata", name="ts")

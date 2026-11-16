@@ -4,6 +4,7 @@ import { KV, Panel } from "./common";
 
 const STATUS_CLS: Record<string, string> = {
   breakout: "text-up",
+  extended: "text-forming",
   near_pivot: "text-accent",
   final_contraction: "text-validated",
   forming: "text-forming",
@@ -30,6 +31,17 @@ export function StageChip({ st }: { st?: StageContext | null }) {
   );
 }
 
+/** Cup-with-handle tag (O'Neil shape; descriptive only, never a gate). */
+export function ShapeBadge({ v }: { v: Pick<VcpRow, "shape" | "shape_label"> }) {
+  if (!v.shape) return <span className="text-[11px] text-muted">-</span>;
+  const cup = v.shape === "cup_with_handle";
+  return (
+    <span className={`text-[11px] ${cup ? "text-accent" : "text-muted"}`} data-vcp-shape={v.shape} title={cup ? "First contraction = cup, final contraction = handle (O'Neil); a descriptive tag, not a gate" : "Successive contractions; not a cup-with-handle shape"}>
+      {v.shape_label ?? v.shape}
+    </span>
+  );
+}
+
 /** Full VCP explanation: why it qualified (or not), contractions, volume, pivot, score. */
 export function VcpPanel({ v, stage, compact = false }: { v: VcpRow; stage?: StageContext | null; compact?: boolean }) {
   const m = v.metrics ?? {};
@@ -39,6 +51,8 @@ export function VcpPanel({ v, stage, compact = false }: { v: VcpRow; stage?: Sta
       <div data-testid="vcp-panel">
         <KV k="Quality (fit score, not a probability)" v={`${v.quality.toFixed(0)} / 100`} />
         <KV k="Contractions" v={v.depths_pct.map((d, i) => `T${i + 1} ${d.toFixed(1)}%`).join(" > ")} />
+        <KV k="Shape (descriptive)" v={<ShapeBadge v={v} />} />
+        {typeof m.trend_template === "string" && <KV k="Trend Template (at the pivot)" v={<span className={m.trend_template_passed ? "text-validated" : "text-down"} title="Minervini Trend Template: price > SMA50 > SMA150 > SMA200, SMA200 rising, >= 30% above the 52W low, within 25% of the 52W high">{m.trend_template as string}</span>} />}
         <KV k="Pivot (final contraction high)" v={`${fmtNum(v.pivot)}${v.pivot_distance_pct === null ? "" : v.pivot_distance_pct >= 0 ? ` · ${v.pivot_distance_pct.toFixed(2)}% above close` : ` · close ${(-v.pivot_distance_pct).toFixed(2)}% above`}`} />
         <KV k="Base" v={`${fmtBarTime(v.base_start, "1d")} - ${fmtBarTime(v.base_end, "1d")} (${v.base_sessions} sessions)`} />
         <KV k="Final / T1 volume" v={fmtNum((m.volume_trend_final_vs_first as number | null) ?? null, 2)} />
@@ -48,6 +62,7 @@ export function VcpPanel({ v, stage, compact = false }: { v: VcpRow; stage?: Sta
         {typeof m.footprint === "string" && <KV k="Footprint (base days, T1/final depth, T count)" v={m.footprint} />}
         {v.breakout_time && <KV k="Breakout candle" v={`${fmtBarTime(v.breakout_time, "1d")}${v.geometry?.breakout?.volume_ratio ? ` · volume ${fmtNum(v.geometry.breakout.volume_ratio, 2)}x 50D` : ""}`} />}
         {v.pivot_crossed_low_volume && <p className="text-[11px] text-forming" data-testid="vcp-low-volume-cross">Closed above the pivot without breakout volume - not a breakout.</p>}
+        {v.extended && <p className="text-[11px] text-forming" data-testid="vcp-extended">Extended: the close is beyond the buy zone above the pivot - no entry here.</p>}
         <KV k="Stage Analysis (context)" v={<StageChip st={stage ?? v.stage} />} />
         {v.status_reason && <p className="mt-1 text-[11px] text-forming">{v.status_reason}</p>}
         {!compact && cl && cl.length > 0 && (

@@ -69,8 +69,12 @@ def test_breakout_with_volume_confirmation(calendar):
 def test_failed_breakout_and_invalidation(calendar):
     failed, _ = run(calendar, tail=BREAKOUT + [(119.0, 2.0, 1.0e6)])
     assert failed["status"] == "failed_breakout" and failed["failure"]["t"] > failed["breakout"]["t"]
-    deep, _ = run(calendar, segments=((118.0, 5, 6.0, 4e6), (70.0, 15, 5.0, 2.5e6), (80.0, 15, 3.0, 1.5e6)))
-    assert deep["status"] == "invalidated" and "deep" in deep["status_reason"]
+    deep, _ = run(calendar, segments=((118.0, 5, 6.0, 4e6), (52.0, 15, 5.0, 2.5e6), (60.0, 15, 3.0, 1.5e6)))
+    assert deep["status"] in ("invalidated", "ipo_low_broken") and deep["status"] != "base_validated"  # > 50 % deep (1.1.0)
+    # 1.1.0: a ~41 % deep IPO base is still a base (TEGA-type), scored lower on depth
+    d41, _ = run(calendar, segments=((118.0, 5, 6.0, 4e6), (72.0, 15, 5.0, 2.5e6), (80.0, 15, 3.0, 1.5e6)))
+    assert d41["status"] not in ("invalidated",) and d41["base"]["depth_pct"] > 35
+    assert {c["name"]: c for c in d41["quality_components"]}["depth"]["score"] < 0.6
 
 
 def test_listing_date_rules(calendar):
@@ -80,7 +84,7 @@ def test_listing_date_rules(calendar):
     assert fb is not None and fb["listing"]["source"] == "first_candle"
     gap = detect_ipo_base(f, CFG, date(2026, 6, 1), calendar=calendar)  # history starts weeks after listing
     assert gap is None
-    old = ipo_frame(IPOSpec(segments=IPOSpec().segments + ((114.0, 400, 1.2, 0.5e6),)), calendar)
+    old = ipo_frame(IPOSpec(segments=IPOSpec().segments + ((114.0, 500, 1.2, 0.5e6),)), calendar)  # 1.1.0: max_age_bars 500
     assert detect_ipo_base(old, CFG, old.index[0].date(), calendar=calendar) is None  # older than max_age_bars
 
 
@@ -101,9 +105,9 @@ def test_an_ipo_base_is_not_a_vcp(calendar):
 
 
 def test_status_labels():
-    assert list(STATUS_LABELS.values()) == ["Too Young", "Discovery Phase", "Base Forming", "Base Validated", "Near Pivot", "Breakout", "Failed Breakout", "Invalidated"]
-    assert (CFG.min_age_bars, CFG.max_age_bars, CFG.discovery_bars, CFG.min_base_bars, CFG.max_base_bars) == (25, 365, 20, 20, 120)
-    assert (CFG.min_base_depth_pct, CFG.max_base_depth_pct, CFG.min_resistance_touches, CFG.near_pivot_pct, CFG.breakout_volume_ratio, CFG.failed_breakout_bars) == (8, 35, 2, 3, 1.5, 5)
+    assert list(STATUS_LABELS.values()) == ["Too Young", "Discovery Phase", "Base Forming", "Base Validated", "Near Pivot", "Breakout", "Failed Breakout", "Invalidated", "Cheat Entry", "IPO Low Broken"]
+    assert (CFG.min_age_bars, CFG.max_age_bars, CFG.discovery_bars, CFG.min_base_bars, CFG.max_base_bars) == (25, 500, 20, 20, 250)  # 1.1.0
+    assert (CFG.min_base_depth_pct, CFG.max_base_depth_pct, CFG.min_resistance_touches, CFG.near_pivot_pct, CFG.breakout_volume_ratio, CFG.failed_breakout_bars) == (8, 50, 2, 3, 1.5, 5)
 
 
 def test_parse_equity_list():
@@ -147,7 +151,7 @@ def ipo_app(tmp_path_factory):
 def test_ipo_scanner_api(ipo_app):
     client, s = ipo_app
     r = client.get("/api/scan/ipo-base").json()
-    assert r["listing_dates_loaded"] == 1 and r["scan"]["ipo_config_version"] == "1.0.0"
+    assert r["listing_dates_loaded"] == 1 and r["scan"]["ipo_config_version"] == CFG.version
     rows = {x["symbol"]: x for x in r["items"]}
     assert set(rows) == {"RECT"}  # only the stock with an official recent listing date
     x = rows["RECT"]
@@ -159,6 +163,71 @@ def test_ipo_scanner_api(ipo_app):
     assert one["source"] == "scan" and one["ipo"]["geometry"]["schema_version"] == "ipo-base-1.0" and one["listing_date_source"] == "nse_equity_list"
     assert client.get("/api/ipo/symbol", params={"symbol": "RWALK"}).json()["ipo"] is None
     cfg = client.get("/api/config/ipo").json()
-    assert cfg["version"] == "1.0.0" and {p["name"] for p in cfg["parameters"]} >= {"min_age_bars", "breakout_volume_ratio"}
+    assert cfg["version"] == CFG.version and {p["name"] for p in cfg["parameters"]} >= {"min_age_bars", "breakout_volume_ratio"}
     ev = client.get("/api/evidence", params={"symbol": "RECT", "source": "ipo_base"}).json()["items"]
     assert len(ev) == 1 and ev[0]["signal_type"] == "ipo_breakout" and ev[0]["category"] == "setup"
+
+
+def test_ipo_scanner_issue_price(ipo_app):
+    """Issue price from NSE past public issues (display only): matched when the IPO
+    listing date is the listing the detector evaluated."""
+    client, s = ipo_app
+    x = client.get("/api/scan/ipo-base").json()["items"][0]
+    assert x["issue_price"] is None and x["vs_issue_pct"] is None  # no past-issues list loaded yet
+    lst = x["listing"]["date"]
+    nse = date.fromisoformat(lst).strftime("%d-%b-%Y").upper()
+    payload = [{"symbol": "RECT", "companyName": "Rect Ltd", "securityType": "Equity", "issuePrice": "80", "listingDate": nse, "priceRange": "Rs.76 to Rs.80"}]
+    equity = f"SYMBOL,NAME OF COMPANY, SERIES, DATE OF LISTING\nRECT,Rect Ltd,EQ,{nse}\n"
+    assert s.universe.refresh_recent_ipos(payload=payload, equity_text=equity, source="fixture", min_rows=1, equity_min_rows=1)["status"] == "ok"
+    x = client.get("/api/scan/ipo-base").json()["items"][0]
+    assert x["issue_price"] is None and "not checked" in x["issue_price_note"]  # split / bonus history unknown yet
+
+    class NoSplits:
+        name = "fake"
+
+        def splits(self, symbol):
+            return {}
+
+    assert s.universe.refresh_ipo_splits(NoSplits(), pause_s=0)["checked"] in (0, 1)  # RECT may be older than the 3-year window
+    s.universe.refresh_ipo_splits(NoSplits(), symbols={"RECT"}, pause_s=0)
+    x = client.get("/api/scan/ipo-base").json()["items"][0]
+    assert x["issue_price"] == 80.0 and x["issue_price_raw"] == 80.0 and x["ipo_security_type"] == "Equity"
+    assert x["vs_issue_pct"] == pytest.approx(round((x["last_close"] / 80.0 - 1) * 100, 2))
+    one = client.get("/api/ipo/symbol", params={"symbol": "RECT"}).json()
+    assert one["ipo"]["issue_price"] == 80.0 and one["listing_date_source"] == "nse_ipo" and one["listing_date"] == lst
+
+
+
+# ---------------------------------------------------------------- IPOConfig 1.1.0 (reference decks, phase 3)
+def test_ipo_low_broken(calendar):
+    """Paytm / Cartrade-type: the close falls below the lowest low of the listing period."""
+    r, _ = run(calendar, segments=((118.0, 5, 6.0, 4e6), (100.0, 15, 5.0, 2.5e6), (84.0, 30, 3.0, 1.0e6)))
+    assert r["status"] == "ipo_low_broken" and r["status_label"] == "IPO Low Broken"
+    assert r["ipo_low"]["first_close_below"] is not None and r["ipo_low"]["closes_below"] >= 1
+    ok, _ = run(calendar)
+    assert ok["ipo_low"]["first_close_below"] is None and ok["status"] != "ipo_low_broken"
+
+
+def test_cheat_entry_inside_the_base(calendar):
+    """A tight sub-base well below the IPO high, broken on volume: early (cheat) entry."""
+    segs = ((120.0, 5, 6.0, 4e6), (95.0, 15, 5.0, 2.5e6), (112.0, 10, 3.0, 1.5e6), (112.0, 15, 1.0, 1.0e6))
+    r, _ = run(calendar, segments=segs, tail=[(115.0, 1.5, 4.0e6)])  # ~1.9x the 50-session average (listing pop included)
+    assert r["status"] == "cheat_entry" and r["cheat_entry"]["volume_ratio"] >= CFG.breakout_volume_ratio
+    assert r["cheat_entry"]["level"] < r["pivot"] * (1 - CFG.cheat_min_below_pct / 100)
+    weak, _ = run(calendar, segments=segs, tail=[(115.0, 1.5, 1.0e6)])  # no volume: not a cheat entry
+    assert weak["status"] != "cheat_entry"
+    # a tight area near the base LOW broken on volume is a bounce, not a base within the base
+    low = ((120.0, 5, 6.0, 4e6), (95.0, 15, 5.0, 2.5e6), (99.0, 10, 3.0, 1.5e6), (99.0, 15, 1.0, 1.0e6))
+    bounce, _ = run(calendar, segments=low, tail=[(102.0, 1.5, 4.0e6)])
+    assert bounce["status"] != "cheat_entry"
+
+
+def test_breakout_retest_held(calendar):
+    r, _ = run(calendar, tail=BREAKOUT + [(124.0, 4.0, 1.0e6)])
+    assert r["status"] == "breakout" and r["retest"] is not None
+    plain, _ = run(calendar, tail=BREAKOUT)
+    assert plain["retest"] is None
+
+
+def test_ipo_1_1_0_defaults():
+    assert (CFG.max_age_bars, CFG.max_base_bars, CFG.max_base_depth_pct, CFG.deep_base_pct) == (500, 250, 50.0, 35.0)

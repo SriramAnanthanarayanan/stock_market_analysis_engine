@@ -258,3 +258,104 @@ def compact(e: dict[str, Any]) -> dict[str, Any]:
             "base_depth_pct", "zone_tests", "all_time_high_in_data", "highest_since_time", "years_since_higher", "breakout_pct", "strength_atr", "volume_ratio",
             "rebreak", "status", "failed_time", "return_since_pct", "max_gain_pct", "max_drawdown_pct", "forward")
     return {k: e.get(k) for k in keys}
+
+
+# ------------------------------------------------------------------ approach (SignalConfig 1.4.0)
+def multiyear_approach(frame: pd.DataFrame, atr: np.ndarray, cfg: SignalConfig) -> dict[str, Any] | None:
+    """The latest completed candle below a resistance that has capped the stock for years
+    and is now within ``multiyear_approach_pct`` - "trading in a range for many years and
+    about to break out" (user, 2026-11-15).
+
+    Overhead levels are the suffix maxima of the highs before the latest candle (the same
+    stack as the breakout walk). For each level within reach, its base starts at the first
+    candle (after the stock was last above it) whose high came within
+    ``multiyear_zone_pct`` of it; levels with a base of >= ``multiyear_min_years`` qualify
+    and the one with the longest base is reported, with its separate tests
+    (``multiyear_test_separation_sessions``), the test score and the approach state."""
+    from .levels import APPROACH_LABELS, approach_state, lows_rising, separate_tests, tests_score
+
+    n = len(frame)
+    if n < 3:
+        return None
+    h, l, c = (frame[k].to_numpy(dtype=float) for k in ("high", "low", "close"))
+    v = frame["volume"].to_numpy(dtype=float)
+    times = frame.index
+    t = n - 1
+    C = float(c[t])
+    if not np.isfinite(C) or C <= 0:
+        return None
+    stack: list[int] = []
+    for k in range(t):
+        if not np.isfinite(h[k]):
+            continue
+        while stack and h[stack[-1]] <= h[k]:
+            stack.pop()
+        stack.append(k)
+    zone = cfg.multiyear_zone_pct / 100.0
+    reach = C * (1.0 + cfg.multiyear_approach_pct / 100.0)
+    best: tuple[float, int, int, int] | None = None  # (years, a, bs, j_prev)
+    for pos, a in enumerate(stack):
+        L = float(h[a])
+        if L < C:
+            break  # the stack's highs fall towards the present: no more overhead levels
+        if L > reach:
+            continue
+        jp = stack[pos - 1] if pos > 0 else -1
+        lo = jp + 1
+        bs = lo + int(np.argmax(h[lo : a + 1] >= L * (1.0 - zone)))
+        yrs = _years(times[bs], times[t])
+        if yrs >= cfg.multiyear_min_years and (best is None or yrs > best[0]):
+            best = (yrs, a, bs, jp)
+    if best is None:
+        return None
+    yrs, a, bs, jp = best
+    L = float(h[a])
+    state, dist = approach_state(C, float(h[t]), L, cfg.multiyear_approach_pct, cfg.multiyear_very_near_pct)
+    if state is None:
+        return None
+    tests = separate_tests(h, bs, t - 1, zone_lo=L * (1.0 - zone), separation=cfg.multiyear_test_separation_sessions)
+    a_t = float(atr[t]) if np.isfinite(atr[t]) and atr[t] > 0 else None
+    lb = cfg.multiyear_volume_lookback
+    ref = v[max(0, t - lb) : t]
+    ref = ref[np.isfinite(ref)]
+    vr = (float(v[t]) / float(ref.mean())) if (len(ref) >= max(1, lb // 2) and ref.mean() > 0 and np.isfinite(v[t])) else None
+    base_low = float(np.nanmin(l[bs:t])) if t > bs else float(l[bs])
+    rec = {
+        "kind": "multiyear_approach",
+        "state": state,
+        "state_label": APPROACH_LABELS[state],
+        "time": iso(times[t]),
+        "t": epoch_s(times[t]),
+        "close": _r(C),
+        "high": _r(h[t]),
+        "level": _r(L),
+        "level_t": epoch_s(times[a]),
+        "level_time": iso(times[a]),
+        "level_years": round(_years(times[a], times[t]), 2),
+        "base_start_t": epoch_s(times[bs]),
+        "base_start_time": iso(times[bs]),
+        "base_years": round(yrs, 2),
+        "base_starts_at_data_start": bs == 0,
+        "base_low": _r(base_low),
+        "base_depth_pct": _r((L - base_low) / L * 100.0, 2),
+        "all_time_high_in_data": jp < 0,
+        "highest_since_time": iso(times[jp]) if jp >= 0 else None,
+        "years_since_higher": round(_years(times[jp], times[t]), 2) if jp >= 0 else None,
+        "zone_floor": _r(L * (1.0 - zone)),
+        "zone_tests": len(tests),
+        "zone_test_times": [iso(times[k]) for k in tests[:12]],
+        "tests_score": tests_score(len(tests), cfg.level_tests_score),
+        "lows_rising": lows_rising(l, bs, t - 1),
+        "distance_pct": _r(dist, 3),
+        "distance_atr": _r((L - C) / a_t, 3) if a_t else None,
+        "volume_ratio": _r(vr, 3),
+        "approach_pct": cfg.multiyear_approach_pct,
+        "very_near_pct": cfg.multiyear_very_near_pct,
+    }
+    since = f"above it last on {rec['highest_since_time'][:10]} ({rec['years_since_higher']} years ago)" if jp >= 0 else "an all-time high within the data"
+    rec["explanation"] = [
+        f"{rec['state_label']}: close {rec['close']} is {rec['distance_pct']} % below {rec['level']} ({since}).",
+        f"Range: {rec['base_years']} years capped below this resistance (from {rec['base_start_time'][:10]}, first high within {cfg.multiyear_zone_pct} % of it); base depth {rec['base_depth_pct']} %.",
+        f"Resistance tests: {rec['zone_tests']} (score {rec['tests_score']}); lows rising: {rec['lows_rising']}. Not a breakout yet - the breakout scanner reports the close above the level.",
+    ]
+    return rec

@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Universe = Literal["nifty500", "fno", "non_fno", "all"]
+Universe = Literal["nifty500", "fno", "non_fno", "ipo", "all"]
 Timeframe = Literal["1h", "4h", "1d", "1w"]
 # Chart timeframes: the scan timeframes plus 1 / 3 / 6 / 12-month candles aggregated
 # from completed daily candles (chart-only; no detector runs on them).

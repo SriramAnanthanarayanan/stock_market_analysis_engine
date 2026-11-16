@@ -24,7 +24,7 @@ from ..config import CHART_SOURCE_INTERVAL, MULTI_MONTH_TIMEFRAMES, TECH_PARAM_M
 from ..data.ohlcv import prepare_series
 from ..indicators.divergence import find_divergences
 from ..models import ChartTimeframe, Timeframe, Universe
-from ..scanner import find_latest_scan, get_scan
+from ..scanner import find_latest_scan, get_scan, ipo_clause
 from ..services import Services
 from ..technical import _crosses, analyze, divergence_record, indicator_series
 from ..timeutil import asof_cutoff, epoch_s, iso, now_ist, parse_iso
@@ -307,7 +307,9 @@ def technical_config(request: Request) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ scanners
-def _universe_clause(t, universe: str):
+def _universe_clause(t, universe: str, engine=None):
+    if universe == "ipo":
+        return ipo_clause(t, engine)
     if universe == "nifty500":
         return t.c.in_nifty500 == 1
     if universe == "fno":
@@ -331,7 +333,7 @@ def _scan_summary(scan: dict[str, Any] | None) -> dict[str, Any] | None:
 def _signal_rows(s: Services, scan_id: str, universe: str, category: str, extra=None) -> list[dict[str, Any]]:
     t = db.tech_signals
     q = select(t).where((t.c.scan_id == scan_id) & (t.c.category == category))
-    uc = _universe_clause(t, universe)
+    uc = _universe_clause(t, universe, s.engine)
     if uc is not None:
         q = q.where(uc)
     if extra is not None:
@@ -458,7 +460,7 @@ def scan_indicators(
         return _empty(scan, NO_TECH)
     t = db.tech_snapshots
     q = select(t).where(t.c.scan_id == scan["scan_id"])
-    uc = _universe_clause(t, universe)
+    uc = _universe_clause(t, universe, s.engine)
     if uc is not None:
         q = q.where(uc)
     with s.engine.connect() as conn:

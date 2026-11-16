@@ -2,6 +2,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import { Disclaimer } from "./components/common";
 import { SymbolSearch } from "./components/SymbolSearch";
 import { ChartPreviewHost } from "./components/StockChartPreview";
+import { ScanActivityBanner } from "./components/ScanActivityBanner";
 import { BreakoutScanner } from "./pages/BreakoutScanner";
 import { CandlestickScanner } from "./pages/CandlestickScanner";
 import { ConfluenceDashboard } from "./pages/ConfluenceDashboard";
@@ -11,6 +12,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Evaluation } from "./pages/Evaluation";
 import { Explorer } from "./pages/Explorer";
 import { FreshBreakoutScanner } from "./pages/FreshBreakoutScanner";
+import { FnoActivity } from "./pages/FnoActivity";
 import { VcpScanner } from "./pages/VcpScanner";
 import { VolumeShocker } from "./pages/VolumeShocker";
 import { Week52Scanner } from "./pages/Week52Scanner";
@@ -18,6 +20,7 @@ import { History } from "./pages/History";
 import { IndexAnalysis } from "./pages/IndexAnalysis";
 import { IndexExplorer } from "./pages/IndexExplorer";
 import { MultiYearBreakouts } from "./pages/MultiYearBreakouts";
+import { DarvasScanner } from "./pages/DarvasScanner";
 import { IndicatorScanner } from "./pages/IndicatorScanner";
 import { RRG } from "./pages/RRG";
 import { StageAnalysis } from "./pages/StageAnalysis";
@@ -30,12 +33,14 @@ const NAV: { to: string; label: string; testid: string; end?: boolean; group?: s
   { to: "/about-to-breakout", label: "About to Break Out", testid: "nav-setups" },
   { to: "/52-week", label: "52-Week Breakouts", testid: "nav-52week" },
   { to: "/multi-year", label: "Multi-Year Breakouts", testid: "nav-multiyear" },
+  { to: "/darvas", label: "Darvas Box", testid: "nav-darvas" },
   { to: "/volume-shocker", label: "Volume Shocker", testid: "nav-volume" },
   { to: "/vcp", label: "VCP Scanner", testid: "nav-vcp" },
   { to: "/ipo-base", label: "IPO Base Breakout", testid: "nav-ipo" },
   { to: "/breakouts", label: "Breakout Scanner", testid: "nav-breakouts" },
   { to: "/indicators", label: "Indicator Scanner", testid: "nav-indicators" },
   { to: "/rrg", label: "RRG", testid: "nav-rrg", group: "Markets" },
+  { to: "/fno", label: "F&O OI Buildup", testid: "nav-fno" },
   { to: "/indices", label: "Index Analysis", testid: "nav-indices" },
   { to: "/stage", label: "Stage Analysis", testid: "nav-stage" },
   { to: "/history", label: "Pattern History", testid: "nav-history", group: "Research" },
@@ -60,6 +65,7 @@ export default function App() {
           <span className="ml-auto hidden text-[11px] text-muted lg:inline">Rule-based chart analysis - not trade recommendations</span>
           <SymbolSearch />
         </div>
+        <ScanActivityBanner />
       </header>
       <div className="flex flex-1">
         <nav className="w-48 shrink-0 border-r border-line bg-panel/40 px-2 py-3" data-testid="side-nav">
@@ -81,6 +87,7 @@ export default function App() {
             <Route path="/fresh-breakouts" element={<FreshBreakoutScanner />} />
             <Route path="/52-week" element={<Week52Scanner />} />
             <Route path="/multi-year" element={<MultiYearBreakouts />} />
+            <Route path="/darvas" element={<DarvasScanner />} />
             <Route path="/volume-shocker" element={<VolumeShocker />} />
             <Route path="/vcp" element={<VcpScanner />} />
             <Route path="/ipo-base" element={<IpoBaseScanner />} />
@@ -88,6 +95,7 @@ export default function App() {
             <Route path="/confluence" element={<ConfluenceDashboard />} />
             <Route path="/indicators" element={<IndicatorScanner />} />
             <Route path="/rrg" element={<RRG />} />
+            <Route path="/fno" element={<FnoActivity />} />
             <Route path="/stage" element={<StageAnalysis />} />
             <Route path="/indices" element={<IndexAnalysis />} />
             <Route path="/index/:code" element={<IndexExplorer />} />

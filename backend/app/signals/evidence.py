@@ -189,6 +189,30 @@ class Publisher:
                 explanation=[f"{len(events)} multi-year breakouts in the history (bases of {min(e['base_years'] for e in events)} to {max(e['base_years'] for e in events)} years)."],
             )
 
+    def multiyear_approach(self, rec: dict[str, Any] | None, version: str, chash: str) -> None:
+        """Below a multi-year resistance and about to break it (state of the latest candle).
+        Kind 'state': the confluence multi-year trigger reads only events."""
+        if not rec:
+            return
+        self.add(
+            source="multiyear", signal_type="multiyear_approach", category="setup", kind="state", direction="bullish",
+            signal_time=rec["time"], signal_t=rec["t"], age_bars=0, status=rec["state"], lifecycle="active",
+            strength=rec["base_years"], quality=round(100.0 * rec["tests_score"], 1), metrics=rec, config_version=version, config_hash=chash,
+            expiry_rule="state: valid until the next scan", explanation=rec["explanation"],
+        )
+
+    def darvas(self, rec: dict[str, Any] | None, version: str, chash: str) -> None:
+        """Darvas box state of the latest candle (listed only; not scored by the confluence engine)."""
+        if not rec:
+            return
+        ev = rec.get("event") or {}
+        self.add(
+            source="darvas", signal_type="darvas_box", category="setup", kind="state", direction="bearish" if rec["state"] == "breakdown" else "bullish",
+            signal_time=ev.get("time") or rec["time"], signal_t=ev.get("t") or rec["t"], age_bars=ev.get("sessions_ago", 0), status=rec["state"],
+            lifecycle="invalidated" if rec["state"] == "breakdown" else "active", strength=rec.get("box_depth_pct"), quality=round(100.0 * rec["tests_score"], 1),
+            metrics=rec, config_version=version, config_hash=chash, expiry_rule="state: valid until the next scan", explanation=rec["explanation"],
+        )
+
     def volume_shocks(self, shocks: list[dict[str, Any]], version: str, chash: str) -> None:
         for v in shocks:
             vu, rule = self._event_expiry("volume_shock", v["index"])

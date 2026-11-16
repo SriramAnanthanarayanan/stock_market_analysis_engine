@@ -103,6 +103,26 @@ class YahooProvider(MarketDataProvider):
     def default_periods(self, interval: str) -> list[str]:
         return list(self._PERIODS[interval])
 
+    def splits(self, symbol: str) -> dict[date, float] | None:
+        """Yahoo's split events (NSE bonus issues are reported as splits too)."""
+        try:
+            with _YF_LOCK:
+                yf = self._lib()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    ser = yf.Ticker(to_ticker(symbol)).splits
+        except Exception as exc:  # network / rate limit / parsing
+            log.warning("split history of %s unavailable: %s", symbol, exc)
+            return None
+        if ser is None:
+            return None
+        out: dict[date, float] = {}
+        for ts, ratio in ser.items():
+            r = float(ratio)
+            if r > 0 and np.isfinite(r):
+                out[pd.Timestamp(ts).date()] = r
+        return out
+
     def _backoff(self, attempt: int) -> None:
         self._sleep(self.backoff_base_s * (2**attempt) + random.uniform(0, self.backoff_base_s))
 

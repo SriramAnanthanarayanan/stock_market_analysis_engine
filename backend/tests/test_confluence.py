@@ -183,6 +183,9 @@ def test_vcp_near_pivot_is_a_setup_not_a_trigger():
     dev = score_symbol([vcp("developing", 80.0)], [], "bullish", CFG)
     assert cat(dev, "setup")["score"] == 0.0 and cat(dev, "setup")["evidence"][0]["status"] == "overlapping"
     assert cat(score_symbol([vcp("near_pivot", 80.0)], [], "bearish", CFG), "setup")["score"] == 0.0  # bullish structure only
+    # VCPConfig 3.0.0: an Extended VCP (far above the pivot without a volume breakout) is no longer a setup
+    ext = score_symbol([vcp("extended", 80.0)], [], "bullish", CFG)
+    assert cat(ext, "setup")["score"] == 0.0 and cat(ext, "setup")["evidence"][0]["status"] == "overlapping"
 
 
 def test_vcp_breakout_counts_as_structure_and_trigger_while_fresh():

@@ -17,6 +17,7 @@ from app.timeutil import IST
 from tests.fixtures_e1 import frame_from
 
 CFG = SignalConfig()
+LEGACY = SignalConfig(fresh_require_base=False)  # the 1.2.0 crossing rule (any 10-day high / low)
 
 
 def bars(closes, highs=None, lows=None, wick=1.0, volume=None):
@@ -116,7 +117,7 @@ def test_level_that_dropped_when_an_old_high_rolled_out_is_not_a_crossing(calend
 def test_repeated_closes_above_the_same_level_create_no_repeat_events(calendar):
     # Breakout, a 1-close dip back inside (not 3), then a genuine re-crossing within the window.
     f = frame(FLAT + [103.0, 104.0, 100.5, 106.5, 107.0, 107.5], calendar)
-    evs, walks = events(f)
+    evs, walks = events(f, LEGACY)  # crossing mechanics: the re-crossing's window holds the breakout (not a base)
     assert [e["index"] for e in bull(evs)] == [40]
     assert bool(walks["bullish"].fresh[43])  # a crossing by the rules ...
     assert bull(evs)[0]["suppressed_crossings"] == 1  # ... suppressed: same episode, not re-armed
@@ -136,7 +137,7 @@ def test_two_closes_back_inside_do_not_rearm(calendar):
     # Only 2 closes back inside, then a new crossing within the lookback: suppressed.
     closes = FLAT + [103.0, 100.5, 100.4, 101.8, 100.6, 100.5, 102.0, 104.4]
     f = frame(closes, calendar)
-    evs, walks = events(f)
+    evs, walks = events(f, LEGACY)  # crossing mechanics (suppression), base rule off
     b = bull(evs)
     assert [e["index"] for e in b] == [40]
     fresh_later = [int(i) for i in np.flatnonzero(walks["bullish"].fresh) if i > 40]
@@ -248,3 +249,56 @@ def test_completed_candles_only_via_prepare_series(calendar):
     ps = prepare_series(f, "TEST", "1d", cutoff, calendar)
     assert len(ps.frame) == len(f) - 1
     assert not bull(events(ps.frame)[0])
+
+
+# ---------------------------------------------------------------- SignalConfig 1.3.0: the 10-day level is a 10-day BASE
+def staircase(sign=1.0, steps=10):
+    """FLAT, then a stair-step trend: 3 candles of +1.5, 2 pause candles -0.3 (mirror for sign -1)."""
+    out, x = [], 100.0
+    for _ in range(steps):
+        for d in (1.5, 1.5, 1.5, -0.3, -0.3):
+            x += sign * d
+            out.append(x)
+    return FLAT + out
+
+
+def test_trend_leg_is_not_a_10_day_base(calendar):
+    """A stair-step advance: after each pause the next up candle closes above the 10-day high,
+    which was set by a candle 2-3 sessions earlier. 1.2.0 reported those as fresh breakouts;
+    1.3.0 needs a base (window <= 3.5 ATR, level held >= 3 sessions): only the break of the
+    flat range counts."""
+    f = frame(staircase(), calendar)
+    new = [e["index"] for e in bull(events(f)[0])]
+    old = [e["index"] for e in bull(events(f, LEGACY)[0])]
+    assert new == [40] and len(old) > 1 and old[0] == 40
+    cs = events(f)[1]["bullish"]
+    later = [i for i in np.flatnonzero(cs.beyond) if i > 50]
+    assert later and not any(cs.base_ok[i] for i in later)
+
+
+def test_flat_base_breakout_reports_the_base(calendar):
+    f = frame(FLAT + [103.0], calendar)
+    e = bull(events(f)[0])[0]
+    assert e["base_required"] and e["base_valid"] and e["base_level_age"] >= CFG.fresh_base_min_level_age
+    assert e["base_range_atr"] <= CFG.fresh_base_max_range_atr and e["base_tests"] >= 2
+
+
+def test_level_set_by_a_recent_candle_is_not_a_base_top(calendar):
+    # flat range, then a spike high two candles before the close above it: the 'level' is 2 sessions old
+    highs = [101.0] * 48 + [103.0, 101.0]
+    closes = [100.0] * 50 + [104.0]
+    h = np.r_[highs, 105.0]
+    f = frame(closes, calendar, highs=h, lows=np.r_[np.full(50, 99.0), 100.0])
+    _, walks = events(f)
+    cs = walks["bullish"]
+    assert cs.base_level_age[-1] == 2 and not cs.base_ok[-1] and not cs.fresh[-1]
+    assert bull(events(f, SignalConfig(fresh_base_min_level_age=2))[0])  # configurable
+
+
+def test_breakdown_needs_a_base_too(calendar):
+    f = frame(FLAT + [97.0], calendar)
+    assert [e["index"] for e in bear(events(f)[0])] == [40]
+    down = frame(staircase(-1.0), calendar)
+    new = [e["index"] for e in bear(events(down)[0])]
+    old = [e["index"] for e in bear(events(down, LEGACY)[0])]
+    assert new == [40] and len(old) > 1

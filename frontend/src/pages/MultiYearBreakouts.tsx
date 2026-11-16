@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { multiYearApi, type MultiYearEvent, type MultiYearResult, type MultiYearRow, type MultiYearStatus, type MultiYearStudy, type MultiYearStudyEvent } from "../api/advanced";
+import { multiYearApi, type MultiYearApproach, type MultiYearApproachResult, type MultiYearEvent, type MultiYearResult, type MultiYearRow, type MultiYearStatus, type MultiYearStudy, type MultiYearStudyEvent } from "../api/advanced";
 import type { Universe } from "../api/types";
 import { ErrorNote, FnoBadge } from "../components/common";
 import { DataTable, type Column } from "../components/DataTable";
@@ -40,6 +40,7 @@ export function MultiYearBreakouts() {
   const [draft, setDraft] = useState(years);
   const [res, setRes] = useState<MultiYearResult | null>(null);
   const [study, setStudy] = useState<MultiYearStudy | null>(null);
+  const [appr, setAppr] = useState<MultiYearApproachResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => setDraft(years), [years]);
@@ -59,7 +60,9 @@ export function MultiYearBreakouts() {
     const p =
       tab === "history"
         ? multiYearApi.study(q).then((r) => (setStudy(r), setError(null)))
-        : multiYearApi.scan({ ...q, max_age: within, status: status || null }).then((r) => (setRes(r), setError(null)));
+        : tab === "approach"
+          ? multiYearApi.approach({ universe, asof: asof || null, min_years: years, fno: fno || null }).then((r) => (setAppr(r), setError(null)))
+          : multiYearApi.scan({ ...q, max_age: within, status: status || null }).then((r) => (setRes(r), setError(null)));
     p.catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [universe, asof, years, within, status, fno, athParam, tab]);
   useEffect(load, [load, tick]);
@@ -104,6 +107,42 @@ export function MultiYearBreakouts() {
     { key: "past", label: "Earlier", align: "right", render: (r) => (r.past_events.length ? <span title={r.past_events.map((e) => `${fmtBarTime(e.time, "1d")}: ${e.base_years.toFixed(1)} years`).join("\n")}>{r.past_events.length}</span> : "-"), sort: (r) => r.past_events.length, title: "Earlier multi-year breakouts of this stock (any length stored)" },
   ];
 
+  const APPR_CLS: Record<string, string> = { touched: "text-up", very_near: "text-accent", approaching: "text-forming" };
+  const openApproach = (r: MultiYearApproach) =>
+    openChart({
+      symbol: r.symbol,
+      timeframe: chartTf(r.base_years),
+      asof: asof || null,
+      context: {
+        title: `${r.base_years.toFixed(1)}-year range - ${r.state_label} the resistance`,
+        lines: [
+          { k: "Resistance", v: `${fmtNum(r.level)} (set ${fmtBarTime(r.level_time, "1d")}; ${r.all_time_high_in_data ? "all-time high in data" : `above it last ${fmtBarTime(r.highest_since_time, "1d")}`})` },
+          { k: "Range", v: `${r.base_years.toFixed(1)} years below it, from ${fmtBarTime(r.base_start_time, "1d")} · ${r.base_depth_pct.toFixed(0)}% deep` },
+          { k: "Distance", v: `${r.distance_pct.toFixed(2)}% below (${fmtNum(r.distance_atr, 2)} ATR)` },
+          { k: "Tests / score", v: `${r.zone_tests} separate tests · score ${r.tests_score.toFixed(1)}${r.lows_rising ? " · lows rising" : ""}` },
+        ],
+        levels: [
+          { price: r.level, label: `${r.base_years.toFixed(1)}-yr resistance ${fmtNum(r.level)}`, t0: r.base_start_t },
+          { price: r.base_low, label: `range low ${fmtNum(r.base_low)}`, color: "#8B9BB4", t0: r.base_start_t },
+        ],
+        focusT: r.base_start_t,
+      },
+    });
+  const approachCols: Column<MultiYearApproach>[] = [
+    { key: "symbol", label: "Symbol", render: (r) => <SymbolButton symbol={r.symbol} onOpen={() => openApproach(r)} />, sort: (r) => r.symbol },
+    { key: "company", label: "Company", render: (r) => <span className="inline-block max-w-[170px] truncate align-bottom text-muted">{r.company}</span>, sort: (r) => r.company ?? "" },
+    { key: "fno", label: "F&O", render: (r) => <FnoBadge value={r.fno_status} /> },
+    { key: "state", label: "State", render: (r) => <span className={`font-medium ${APPR_CLS[r.state] ?? ""}`} data-approach={r.state}>{r.state_label}</span>, sort: (r) => ({ touched: 0, very_near: 1, approaching: 2 })[r.state] ?? 9 },
+    { key: "years", label: "Years in range", align: "right", render: (r) => <span className="font-semibold text-accent">{r.base_years.toFixed(1)}</span>, sort: (r) => r.base_years, title: "Years the resistance has capped the stock (from the first high within the zone)" },
+    { key: "level", label: "Resistance", align: "right", render: (r) => fmtNum(r.level), sort: (r) => r.level },
+    { key: "close", label: "Close", align: "right", render: (r) => fmtNum(r.close), sort: (r) => r.close },
+    { key: "dist", label: "Below %", align: "right", render: (r) => r.distance_pct.toFixed(2), sort: (r) => r.distance_pct, title: "(resistance - close) / resistance" },
+    { key: "tests", label: "Tests", align: "right", render: (r) => <span className={r.zone_tests >= 3 ? "font-semibold text-validated" : ""} title={r.zone_test_times.map((x) => fmtBarTime(x, "1d")).join("\n")}>{r.zone_tests}</span>, sort: (r) => r.zone_tests, title: "Separate tests of the resistance zone (3+ highlighted: buyers keep coming back)" },
+    { key: "lows", label: "Lows rising", render: (r) => (r.lows_rising === null ? "-" : r.lows_rising ? "yes" : "no"), sort: (r) => (r.lows_rising ? 1 : 0) },
+    { key: "depth", label: "Range depth", align: "right", render: (r) => `${r.base_depth_pct.toFixed(0)}%`, sort: (r) => r.base_depth_pct },
+    { key: "ath", label: "Price level", render: (r) => (r.all_time_high_in_data ? <span className="text-validated">ATH</span> : <span className="text-muted">since {year(r.highest_since_time)}</span>), sort: (r) => (r.all_time_high_in_data ? 1 : 0) },
+  ];
+
   const studyCols: Column<MultiYearStudyEvent>[] = [
     { key: "symbol", label: "Symbol", render: (r) => <SymbolButton symbol={r.symbol} onOpen={() => open(r)} />, sort: (r) => r.symbol },
     { key: "company", label: "Company", render: (r) => <span className="inline-block max-w-[160px] truncate align-bottom text-muted">{r.company}</span>, sort: (r) => r.company ?? "" },
@@ -139,7 +178,7 @@ export function MultiYearBreakouts() {
         timeframe={null}
         asof={asof}
         onChange={(p) => set({ u: p.universe ?? universe, asof: p.asof ?? asof })}
-        scan={(tab === "history" ? study?.scan : res?.scan) ?? null}
+        scan={(tab === "history" ? study?.scan : tab === "approach" ? appr?.scan : res?.scan) ?? null}
         onScanDone={() => setTick((x) => x + 1)}
       >
         <div className="flex flex-col gap-1">
@@ -202,11 +241,14 @@ export function MultiYearBreakouts() {
           </select>
         </Field>
         <span className="text-xs text-muted" data-testid="result-count">
-          {tab === "history" ? `${study?.events_total ?? 0} past breakouts` : `${res?.count ?? 0} results`}
+          {tab === "history" ? `${study?.events_total ?? 0} past breakouts` : tab === "approach" ? `${appr?.count ?? 0} results` : `${res?.count ?? 0} results`}
         </span>
       </TechScanHeader>
       <div className="flex gap-1">
-        <button className={`chip h-8 ${tab !== "history" ? "chip-on" : ""}`} onClick={() => set({ tab: "" })} data-testid="my-tab-recent">
+        <button className={`chip h-8 ${tab === "approach" ? "chip-on" : ""}`} onClick={() => set({ tab: "approach" })} data-testid="my-tab-approach">
+          About to break out
+        </button>
+        <button className={`chip h-8 ${tab !== "history" && tab !== "approach" ? "chip-on" : ""}`} onClick={() => set({ tab: "" })} data-testid="my-tab-recent">
           Recent breakouts
         </button>
         <button className={`chip h-8 ${tab === "history" ? "chip-on" : ""}`} onClick={() => set({ tab: "history" })} data-testid="my-tab-history">
@@ -214,7 +256,12 @@ export function MultiYearBreakouts() {
         </button>
       </div>
       {error && <ErrorNote message={error} />}
-      {tab !== "history" ? (
+      {tab === "approach" ? (
+        <>
+          {appr?.note && <div className="text-[11px] text-muted">{appr.note}</div>}
+          <DataTable rows={appr?.items ?? []} columns={approachCols} testid="multiyear-approach-table" onRow={(r) => openApproach(r)} empty={`No stock is within reach of a ${minYears}+ year resistance in the latest daily scan.`} initialSort={{ key: "years", desc: true }} />
+        </>
+      ) : tab !== "history" ? (
         <>
           {res?.note && <div className="text-[11px] text-muted">{res.note}</div>}
           <DataTable rows={res?.items ?? []} columns={recentCols} testid="multiyear-table" onRow={(r) => open(r)} empty={`No close above a ${minYears}+ year resistance in this window of the latest daily scan.`} initialSort={{ key: "bo", desc: true }} />

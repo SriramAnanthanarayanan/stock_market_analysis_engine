@@ -234,6 +234,13 @@ class MarketDataService:
             # every candle completed by then (within the provider's history).
             return last_fetch >= pd.Timestamp(cutoff)
         latest_end = self.calendar.latest_completed_bar_end(_INTERVAL_TF[interval], now)
+        # The provider publishes the official close a little after the bar ends. Once
+        # that settle time has passed, a fetch made before it (e.g. a chart opened at
+        # 15:40) holds a provisional candle and must be downloaded again.
+        settle_min = self.settings.daily_settle_minutes if interval in ("1d", "1wk") else self.settings.intraday_settle_minutes
+        settled = latest_end + timedelta(minutes=settle_min)
+        if now >= settled:
+            return last_fetch >= pd.Timestamp(settled)
         return last_fetch >= pd.Timestamp(latest_end)
 
     def ensure(

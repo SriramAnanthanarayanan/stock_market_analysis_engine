@@ -1,7 +1,7 @@
 // Mirrors backend/app/models.py. The backend is the source of truth for every
 // detection and every coordinate; the frontend only renders.
 
-export type Universe = "nifty500" | "fno" | "non_fno" | "all";
+export type Universe = "nifty500" | "fno" | "non_fno" | "ipo" | "all";
 export type Timeframe = "1h" | "4h" | "1d" | "1w";
 /** Scan timeframes + chart-only multi-month timeframes (see lib/timeframes.ts). */
 export type ChartTf = Timeframe | "1mo" | "3mo" | "6mo" | "12mo";
@@ -157,6 +157,16 @@ export interface ScanSummary {
   detection_count: number | null;
   message: string | null;
   warnings: string[];
+}
+
+/** GET /api/scan/active: background scans (startup, scheduler, manual) for every page. */
+export interface ScanActivityResponse {
+  time: string;
+  active: ScanSummary[];
+  /** completed daily/weekly scans whose confluence snapshot is still being written */
+  postprocessing: string[];
+  recent_finished: ScanSummary[];
+  startup_pending: string[];
 }
 
 export interface DetectionCounts {
@@ -865,6 +875,15 @@ export interface StageMetrics {
   base_range_pct?: number | null;
   base_duration_weeks?: number | null;
   distance_to_breakout_pct?: number | null;
+  /** StageConfig 1.5.0: tight (<= 30 %) / wide (30-40 %) base; display-only targets (base height, Weinstein swing rule). */
+  base_tightness?: "tight" | "wide" | null;
+  tight_base_weeks?: number | null;
+  base_start_week?: string | null;
+  target_base_height?: number | null;
+  target_base_height_pct?: number | null;
+  target_swing_rule?: number | null;
+  target_swing_rule_pct?: number | null;
+  swing_rule_peak?: number | null;
   higher_lows?: boolean | null;
   prior_decline_pct?: number | null;
   ema30?: number | null;

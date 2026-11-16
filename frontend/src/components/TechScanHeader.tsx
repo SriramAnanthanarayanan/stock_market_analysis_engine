@@ -12,6 +12,7 @@ export interface HeaderScan {
   signal_config_version?: string | null;
 }
 import { fmtDateTime } from "../lib/format";
+import { pollScanActivityNow, useOnScanFinished } from "../lib/scanActivity";
 import { TIMEFRAMES, UNIVERSES } from "../lib/status";
 
 interface Props {
@@ -34,6 +35,11 @@ export function TechScanHeader(p: Props) {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
   const [active, setActive] = useState<ScanSummary | null>(null);
   const tf = p.timeframe ?? "1d";
+  // Startup / scheduler scans download new candles in the background: reload when one
+  // of this page's timeframe finishes (the user never has to press "Run scan" for that).
+  useOnScanFinished(tf, p.asof || null, (s) => {
+    if (s.scan_id !== active?.scan_id) p.onScanDone();
+  });
   useEffect(() => {
     if (!active || !["queued", "running"].includes(active.state)) return;
     const id = window.setTimeout(() => {
@@ -52,7 +58,10 @@ export function TechScanHeader(p: Props) {
     api
       .refresh({ universe: p.universe, timeframe: tf, asof: p.asof || null })
       .then((r) => api.scanStatus(r.scan_id))
-      .then(setActive)
+      .then((s) => {
+        setActive(s);
+        pollScanActivityNow();
+      })
       .catch(() => setActive(null));
   };
   const running = active && ["queued", "running"].includes(active.state);

@@ -5,7 +5,7 @@ import type { Universe } from "../api/types";
 import { ErrorNote, FnoBadge, QualityCell } from "../components/common";
 import { DataTable, type Column } from "../components/DataTable";
 import { Field, TechScanHeader } from "../components/TechScanHeader";
-import { StageChip, VcpPanel, VcpStatus } from "../components/VcpPanel";
+import { ShapeBadge, StageChip, VcpPanel, VcpStatus } from "../components/VcpPanel";
 import { fmtBarTime, fmtNum } from "../lib/format";
 import { SymbolButton, useOpenChart } from "../lib/openChart";
 
@@ -14,6 +14,7 @@ const PRESETS: { key: string; label: string; status: string }[] = [
   { key: "near", label: "Near Pivot", status: "near_pivot" },
   { key: "tight", label: "Final Contraction", status: "final_contraction,near_pivot" },
   { key: "bo", label: "Breakouts", status: "breakout" },
+  { key: "ext", label: "Extended", status: "extended" },
   { key: "forming", label: "Forming", status: "forming" },
   { key: "failed", label: "Failed / invalidated", status: "failed_breakout,invalidated" },
 ];
@@ -72,6 +73,7 @@ export function VcpScanner() {
     { key: "fno", label: "F&O", render: (r) => <FnoBadge value={r.fno_status} /> },
     { key: "status", label: "VCP status", render: (r) => <VcpStatus v={r} />, sort: (r) => r.status },
     { key: "quality", label: "Quality", render: (r) => <QualityCell score={r.quality} label={r.qualified ? "qualified" : "not qualified"} />, sort: (r) => r.quality },
+    { key: "shape", label: "Shape", render: (r) => <ShapeBadge v={r} />, sort: (r) => r.shape ?? "", title: "Cup with handle (O'Neil) or plain VCP - descriptive tag, not a gate" },
     { key: "t", label: "Contractions", render: (r) => <span className="num text-ink">{r.depths_pct.map((d) => `${d.toFixed(1)}%`).join(" > ")}</span>, sort: (r) => r.contractions, title: "Depth of T1 > T2 > ... (% from each contraction high)" },
     { key: "final", label: "Final", align: "right", render: (r) => `${fmtNum(r.final_depth_pct, 1)}%`, sort: (r) => r.final_depth_pct },
     { key: "vol", label: "Final/T1 vol", align: "right", render: (r) => fmtNum((r.metrics?.volume_trend_final_vs_first as number | null) ?? null, 2), sort: (r) => (r.metrics?.volume_trend_final_vs_first as number | null) ?? null, title: "Mean volume of the final contraction / T1 (supply drying up < 1)" },

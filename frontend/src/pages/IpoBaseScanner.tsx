@@ -17,13 +17,17 @@ const STATUS_CLS: Record<IpoStatus, string> = {
   breakout: "text-up",
   failed_breakout: "text-invalid",
   invalidated: "text-invalid",
+  cheat_entry: "text-accent",
+  ipo_low_broken: "text-down",
 };
 const PRESETS: { key: string; label: string; status: string }[] = [
   { key: "", label: "All bases", status: "" },
   { key: "near", label: "Near pivot / breakout", status: "near_pivot,breakout" },
+  { key: "cheat", label: "Cheat entry", status: "cheat_entry" },
   { key: "valid", label: "Base validated", status: "base_validated" },
   { key: "forming", label: "Discovery / forming", status: "discovery_phase,base_forming" },
   { key: "failed", label: "Failed / invalidated", status: "failed_breakout,invalidated" },
+  { key: "lowbroken", label: "IPO low broken", status: "ipo_low_broken" },
   { key: "young", label: "Too young", status: "too_young" },
 ];
 
@@ -40,7 +44,11 @@ function IpoPanel({ v }: { v: IpoRow }) {
   return (
     <Panel title="IPO base (daily)" right={<IpoStatusChip v={v} />}>
       <div data-testid="ipo-panel">
-        <KV k="Listed" v={`${v.listing.date} (${v.listing.source === "nse_equity_list" ? "official NSE list" : "first candle - fallback"})`} />
+        <KV k="Listed" v={`${v.listing.date} (${v.listing.source === "nse_equity_list" ? "official NSE listing date" : "first candle - fallback"})`} />
+        {v.issue_price != null && (
+          <KV k="Issue price" v={`${fmtNum(v.issue_price)}${v.vs_issue_pct != null ? ` · last close ${v.vs_issue_pct >= 0 ? "+" : ""}${v.vs_issue_pct.toFixed(1)}% vs issue` : ""}${v.ipo_security_type === "SME" ? " · SME IPO, now on the main board" : ""}`} />
+        )}
+        {v.issue_price_note && <p className="text-[11px] text-muted">{v.issue_price_note}</p>}
         <KV k="Age" v={`${v.age_bars} completed sessions`} />
         <KV k="Discovery period" v={`${v.discovery.bars} sessions · ${fmtNum(v.discovery.low)} - ${fmtNum(v.discovery.high)}`} />
         {b && (
@@ -131,7 +139,27 @@ export function IpoBaseScanner() {
     { key: "company", label: "Company", render: (r) => <span className="text-muted">{r.company}</span>, sort: (r) => r.company ?? "" },
     { key: "fno", label: "F&O", render: (r) => <FnoBadge value={r.fno_status} /> },
     { key: "status", label: "Status", render: (r) => <IpoStatusChip v={r} />, sort: (r) => r.status },
-    { key: "listed", label: "Listed", render: (r) => <span title={r.listing.source === "nse_equity_list" ? "official NSE equity list" : "first candle (fallback)"}>{r.listing.date}</span>, sort: (r) => r.listing.date },
+    { key: "listed", label: "Listed", render: (r) => <span title={r.listing.source === "nse_equity_list" ? "official NSE listing date" : "first candle (fallback)"}>{r.listing.date}</span>, sort: (r) => r.listing.date },
+    {
+      key: "issue",
+      label: "Issue",
+      align: "right",
+      render: (r) => (
+        <span title={r.issue_price_note ?? "IPO issue price (NSE past public issues)"} className={r.split_factor && r.split_factor !== 1 ? "underline decoration-dotted" : ""}>
+          {fmtNum(r.issue_price ?? null)}
+        </span>
+      ),
+      sort: (r) => r.issue_price ?? null,
+      title: "IPO issue price (NSE past public issues), adjusted for splits / bonus since the IPO like the chart",
+    },
+    {
+      key: "vsissue",
+      label: "vs issue",
+      align: "right",
+      render: (r) => (r.vs_issue_pct == null ? "-" : <span className={r.vs_issue_pct >= 0 ? "text-up" : "text-down"}>{`${r.vs_issue_pct >= 0 ? "+" : ""}${r.vs_issue_pct.toFixed(1)}%`}</span>),
+      sort: (r) => r.vs_issue_pct ?? null,
+      title: "Last close vs the IPO issue price",
+    },
     { key: "age", label: "Age", align: "right", render: (r) => `${r.age_bars}d`, sort: (r) => r.age_bars, title: "Completed sessions since listing" },
     { key: "q", label: "Quality", render: (r) => <QualityCell score={r.quality} label="" />, sort: (r) => r.quality },
     { key: "depth", label: "Base depth", align: "right", render: (r) => (r.base ? `${r.base.depth_pct.toFixed(1)}%` : "-"), sort: (r) => r.base?.depth_pct ?? null },
@@ -177,6 +205,9 @@ export function IpoBaseScanner() {
       </TechScanHeader>
       {error && <ErrorNote message={error} />}
       {res && res.listing_dates_loaded === 0 && <div className="text-[11px] text-forming">No official listing dates loaded yet (NSE equity list); they are refreshed with the universe.</div>}
+      {universe !== "ipo" && universe !== "all" && (
+        <div className="text-[11px] text-muted">Recent IPOs outside NIFTY 500 / F&O are in the &quot;Recent IPOs&quot; and &quot;All&quot; universes.</div>
+      )}
       {res?.note && <div className="text-[11px] text-muted">{res.note}</div>}
       <div className={`grid gap-3 ${selected ? "xl:grid-cols-[minmax(0,1fr)_380px]" : ""}`}>
         <DataTable rows={res?.items ?? []} columns={cols} testid="ipo-table" onRow={(r) => setSelected(r)} empty="No recent listing matches these filters on the latest daily scan." initialSort={{ key: "q", desc: true }} />

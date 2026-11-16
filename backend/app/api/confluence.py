@@ -33,7 +33,9 @@ def _check_asof(asof: date | None) -> None:
         raise HTTPException(status_code=422, detail="asof cannot be in the future")
 
 
-def _in_universe(r: dict[str, Any], universe: str) -> bool:
+def _in_universe(r: dict[str, Any], universe: str, ipos: set[str] | None = None) -> bool:
+    if universe == "ipo":
+        return r["symbol"] in (ipos or set())
     if universe == "nifty500":
         return r["in_nifty500"]
     if universe == "fno":
@@ -80,8 +82,9 @@ def confluence(
     vcps = set(vcp.split(",")) if vcp else None
     needle = (q or "").strip().upper()
     items = []
+    ipos = s.universe.recent_ipo_symbols() if universe == "ipo" else None
     for r in snapshot_rows(s, run["snapshot_id"]):
-        if r["direction"] != want_dir or not _in_universe(r, universe):
+        if r["direction"] != want_dir or not _in_universe(r, universe, ipos):
             continue
         if not include_unranked and not r["ranked"]:
             continue

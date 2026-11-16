@@ -19,6 +19,7 @@ It is **not** a trading system, an advisory service or a signal generator. A pat
 | A3 | Universal chart preview from every table + fullscreen terminal, 1 / 3 / 6 / 12-month candles, 1/3/6/12-month performance, TradingView-style Fibonacci retracement / extension, drawings stored in the database (autosave, versions, tabs, backup) | **Done** |
 | A4 | Confluence Dashboard: five-category explainable score from stored evidence, no double counting, freshness, coverage, same-session breakout + Marubozu + volume bonus, bearish separately, nine screens | **Done** |
 | A5 | Improvements: candlestick / line chart switch, running (incomplete) 1W / multi-month candle, VCP detector v2 (successive contractions T1 > T2 > ... -> pivot, drawn as a structure), IPO Base Breakout scanner, 10-day About to Break Out states, Multi-Year Breakouts (any number of years, with a what-happened-next study), confluence 1.2 (setups, IPO base, multi-year, dry-up, sector strength), drawings per user + text notes | **Done** (synthetic data only; VCP / IPO base / multi-year not validated on labelled real charts) |
+| F&O | F&O OI Buildup: the standalone "Bhav copy" futures price + OI buildup rules (unchanged) on NSE F&O / equity / index bhavcopy, existing-positions watchlist, delivery / basis / PCR / OI walls / ATM IV context | **Done** (rule not validated) |
 
 Patterns: Falling / Rising / Horizontal Channel, Rectangle, Ascending / Descending / Symmetrical Triangle, Falling / Rising Wedge (P1); Bullish / Bearish Flag, Bullish / Bearish Pennant, Double Top / Bottom, Head & Shoulders, Inverse Head & Shoulders (P2). Support/resistance zones are a shared feature shown in the Explorer.
 
@@ -168,6 +169,8 @@ cd backend
 
 On first start the backend downloads the NIFTY 500 and F&O lists and this year's NSE holidays, then runs the startup scans 1D → 1W → 4H → 1H for the whole universe (about 500 symbols; ~2-3 minutes on a normal connection). Later starts restore the last results from SQLite and only scan when a new completed candle exists.
 
+You never need **Refresh scan** to get new candles. The backend downloads them by itself: at startup (1D takes ~5 minutes for the full universe, then 1W, 4H, 1H), every weekday at 16:01 IST (close 15:30 + 30-minute settle) for 1D and 1W, and every 30 min / 2 h during the session for 1H / 4H. While such a scan runs, a strip under the header reads **Updating market data**, and every page reloads by itself when a scan of its timeframe has finished. During the session the daily chart ends at the previous session: today's candle is complete only after the close (no look-ahead).
+
 Environment switches: `PAS_SCHEDULER=0` (no scheduler), `PAS_STARTUP_SCANS=0`, `PAS_NETWORK=0` (cache only), `PAS_PORT`, `PAS_DATA_DIR`, `PAS_CACHE_DIR`, `PAS_DB_PATH`.
 
 ### Start the frontend (port 5191)
@@ -272,6 +275,16 @@ curl.exe "http://127.0.0.1:8031/api/scan/multiyear-breakouts?min_years=10&max_ag
 curl.exe "http://127.0.0.1:8031/api/multiyear/study?min_years=10"
 curl.exe "http://127.0.0.1:8031/api/confluence?screen=breakout_marubozu_volume"
 curl.exe "http://127.0.0.1:8031/api/chart?symbol=ITC&timeframe=3mo"
+```
+
+### F&O OI Buildup (`/fno`)
+
+The futures price + open-interest buildup rules from the standalone "Bhav copy" screener, unchanged, on official NSE end-of-day files (F&O bhavcopy, full equity bhavcopy with delivery, index closes). The first start downloads about one year of sessions in the background (about 20 minutes; `PAS_FNO_BACKFILL_SESSIONS`); afterwards a weekday evening job (18:05-23:35 IST) stores each new session once NSE publishes it. The page lists the day's Strong / normal Long and Short Buildups, your existing positions (watchlist, quadrant status) and context (basis, volume ratio, delivery %, ranges, PCR, OI walls, combined OI trend, approximate ATM IV). Rollover days, gaps and probable corporate actions are reported, never "fixed" in the rule. `docs/fno-activity.md`.
+
+```powershell
+curl.exe "http://127.0.0.1:8031/api/fno/status"
+curl.exe "http://127.0.0.1:8031/api/fno/activity?date=2026-11-13"
+curl.exe -X POST "http://127.0.0.1:8031/api/fno/refresh" -H "Content-Type: application/json" -d "{}"
 ```
 
 ### Pattern history and outcomes (History page)

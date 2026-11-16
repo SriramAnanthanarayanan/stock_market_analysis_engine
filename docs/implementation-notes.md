@@ -16,6 +16,9 @@ Decisions and assumptions made while implementing the specification. Each is con
 | As-of cutoff | End of the selected IST day, capped at now. | "Data available as of the selected date". |
 | Daily settle | Scheduler judges a daily/weekly candle "new" 30 minutes after 15:30. | NSE publishes the official close after the session; the provider updates later. |
 | Startup scans | Run in 1D, 1W, 4H, 1H order only when no scan exists for the current configuration or a new completed candle exists, also outside session hours. | The session-window rule targets repeated intraday scans; a one-off startup catch-up behaves like a manual refresh. |
+| After-close job (2026-11-15) | Weekdays at close + daily settle + 1 min (16:01 IST) the scheduler ticks 1D and 1W; `needs_scan` still decides (holidays skip). | The interval jobs are anchored to the moment the app started, so the new daily candle could arrive up to 6 h late (app started 15:00 -> first 1D tick 21:00). |
+| Cache freshness vs settle (2026-11-15) | Once the close has settled, a daily/weekly cache fetched before the settle time (e.g. a chart opened at 15:40) is not fresh and is downloaded again. | Such a fetch holds a provisional candle; before, it counted as fresh until the next session. |
+| Background scans in the UI (2026-11-15) | `GET /api/scan/active` (running scans, startup timeframes still pending, recently finished scans; a 1D/1W scan is listed as finished only after its confluence snapshot is written). The app header shows **Updating market data** and pages reload when a scan of their timeframe and as-of date finishes. | Pages showed the previous scan until the user pressed Run scan, although the startup scan was downloading the new candles. |
 
 ## Additions beyond the specification (all configurable)
 
@@ -172,3 +175,28 @@ Source: the user's fourth specification (line chart, running candles, VCP rebuil
 * The 4H and 1H scans share one hourly download: the 1H scan after a 4H scan found all 498 symbols fresh.
 * An F&O-only scan and the all-universe scan filtered to F&O produced identical detection IDs, statuses and qualities (146 = 146).
 * After a restart the last results are served from SQLite and startup scans are skipped when no new candle exists.
+
+## Phase 1 of the 2026-11-15 improvement plan (VCP 3.0, Stage base 1.4.0, 10-day base 1.3.0)
+
+Source: your nine suggestions of 2026-11-15 after the reference-document review; agreed plan in five phases (1 fix wrong outputs; 2 shared level engine - touches, approach states for 52-week / multi-year levels, Darvas box; 3 IPO base; 4 head and shoulders after your examples; 5 intraday deferred to a broker API).
+
+* **VCP 3.0.0** (`docs/vcp-methodology.md`, v3 section): contraction duration, 70 % recovery, Minervini Trend Template (candidate filter + gate), Extended status, later volume breakout, cup-with-handle tag. Confluence lists an Extended VCP without scoring it.
+* **StageConfig 1.4.0** (`docs/stage-analysis-implementation.md`): variable-length base (>= 26 weeks inside the 30 % band, entry leg dropped, prior decline before the base start). You explicitly asked for this change (hard rule 1).
+* **SignalConfig 1.3.0** (`docs/first-time-breakout.md`): the 10-day level must be a tight, sideways 10-session base whose top held >= 3 sessions; About to Break Out states only on such bases.
+* No schema change (new values live in the existing JSON columns). Every config hash changed, so the scheduler rescans after the restart.
+* Live replays on the cached data were run read-only before the change was kept; the numbers are in each document. None of this is validated on labelled charts.
+
+## StageConfig 1.5.0 (2026-11-16, your decision)
+
+52-week minimum base, 40 % band (tight = also a 52-week base inside 30 %), 30-week EMA and RS Line unchanged, display-only targets (base height, Weinstein swing rule). Sources and live effect: `docs/stage-analysis-implementation.md`. Hash `b3c32f0c00891b3e`. Also fixed: the chart terminal drew VCP geometry only for schema `vcp-2.x`, so VCP 3.0 overlays were missing (now `vcp-2.x` and `vcp-3.x`); About to Break Out breakout rows now report the base of the event candle.
+
+## Phase 2 of the 2026-11-15 plan - SignalConfig 1.4.0 (2026-11-16)
+
+Hash `262f4869ada3694c`.
+
+* **Shared level engine** (`signals/levels.py`, `docs/level-engine.md`): separate tests of a level, a 0-1 test score (3+ tests rank higher, ASSUMPTION), lows rising, approach states (Approaching / Very Near / Touched).
+* **52-week**: tests and approach on every state row; page view "About to break the 52-week high".
+* **Multi-year**: "About to break out" tab. A resistance that capped the stock for 1+ years is within 5 % (live 2026-11-16: 30 stocks).
+* **10-day base**: separate tests feed a new setup-quality component.
+* **Darvas box** (`signals/darvas.py`, `docs/darvas-box.md`, page `/darvas`): literal Darvas rules plus one ASSUMPTION, a 20 % maximum box depth (live check: falling stocks otherwise built 20-38 % "boxes"). Listed, not scored by confluence (no double count with the 52-week breakout). Live 2026-11-16: 34 boxes (4 breakouts).
+* No schema change. Tests: `tests/test_levels_darvas.py` (16). Self-test +2.

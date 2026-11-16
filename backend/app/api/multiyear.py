@@ -121,6 +121,62 @@ def scan_multiyear(
     }
 
 
+APPROACH_SINCE = (1, 4, 0)  # SignalConfig version that added the approach states (shared level engine)
+APPROACH_LABELS = {"approaching": "Approaching", "very_near": "Very Near", "touched": "Touched"}
+APPROACH_RANK = {"touched": 0, "very_near": 1, "approaching": 2}
+
+
+@router.get("/scan/multiyear-approach")
+def scan_multiyear_approach(
+    request: Request,
+    universe: Universe = "all",
+    asof: date | None = None,
+    min_years: float = Query(1.0, ge=0, le=100, description="minimum years the resistance has capped the stock"),
+    state: str | None = Query(None, max_length=60, description="comma-separated: approaching, very_near, touched (default all)"),
+    min_tests: int = Query(0, ge=0, le=50, description="minimum separate tests of the resistance"),
+    fno: Literal["YES", "NO", "UNKNOWN"] | None = None,
+) -> dict[str, Any]:
+    """Stocks below a resistance that has capped them for years and is now close: about to break out
+    (SignalConfig 1.4.0). The breakout itself is in /scan/multiyear-breakouts."""
+    _check_asof(asof)
+    s = svc(request)
+    cfg = s.signal_cfg
+    scan, empty = _scan(s, universe, asof)
+    if empty is not None:
+        return empty
+    if _version(scan.get("signal_config_version")) < APPROACH_SINCE:
+        return _empty(scan, OLD_SCAN.format(v=scan.get("signal_config_version")).replace("multi-year breakout scanner", "multi-year approach states"))
+    wanted = set(state.split(",")) if state else set(APPROACH_LABELS)
+    unknown = wanted - set(APPROACH_LABELS)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown approach state {sorted(unknown)}; allowed {sorted(APPROACH_LABELS)}")
+    t = db.signal_evidence
+    rows = evidence_rows(s, scan["scan_id"], universe, ("multiyear",), and_(t.c.signal_type == "multiyear_approach", t.c.strength >= min_years, t.c.status.in_(sorted(wanted))))
+    items = []
+    for e in rows:
+        if fno and e["fno_status"] != fno:
+            continue
+        r = _row(e)
+        if (r.get("zone_tests") or 0) < min_tests:
+            continue
+        items.append(r)
+    items.sort(key=lambda r: (APPROACH_RANK.get(r.get("state"), 9), -(r.get("base_years") or 0), -(r.get("zone_tests") or 0)))
+    return {
+        "scan": scan_summary(scan),
+        "count": len(items),
+        "items": items,
+        "min_years": min_years,
+        "state_labels": APPROACH_LABELS,
+        "params": {k: getattr(cfg, k) for k in ("multiyear_min_years", "multiyear_zone_pct", "multiyear_test_separation_sessions", "multiyear_approach_pct", "multiyear_very_near_pct", "level_tests_score")},
+        "note": (
+            f"Below a resistance that has capped the stock for at least {min_years:g} years and is now within {cfg.multiyear_approach_pct:g} % "
+            f"(Very Near {cfg.multiyear_very_near_pct:g} %, Touched = intraday at or through it with the close below). Range = from the first high within "
+            f"{cfg.multiyear_zone_pct:g} % of the level; tests = separate visits to that zone ({cfg.multiyear_test_separation_sessions}+ sessions apart; 3+ rank higher - ASSUMPTION). "
+            "Not a breakout and not a trade recommendation."
+        ),
+    }
+
+
 @router.get("/multiyear/symbol")
 def multiyear_symbol(
     request: Request,

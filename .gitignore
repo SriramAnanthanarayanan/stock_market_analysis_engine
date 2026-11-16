@@ -27,3 +27,6 @@ logs/
 frontend/node_modules/
 frontend/dist/
 ui-screenshots/
+
+# Third-party reference material (books, course decks): copyrighted, ~115 MB - kept local only
+reference_document/

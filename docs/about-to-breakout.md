@@ -1,6 +1,6 @@
 # About to Break Out (10-day high)
 
-Code: `backend/app/signals/breakouts.py` (`breakout_setups`, `setup_quality`; the same crossing engine as the fresh 10-day breakouts in `signals/crossing.py`), run by every daily scan and published as `signal_evidence` rows (source `fresh_breakout`, kind `state`); API `GET /api/scan/breakout-setups`; page **About to Break Out** (`frontend/src/pages/AboutToBreakout.tsx`). Parameters: `SignalConfig` **1.1.0**, hash `bb601be383bb6721` (`GET /api/config/signals`).
+Code: `backend/app/signals/breakouts.py` (`breakout_setups`, `setup_quality`; the same crossing engine as the fresh 10-day breakouts in `signals/crossing.py`), run by every daily scan and published as `signal_evidence` rows (source `fresh_breakout`, kind `state`); API `GET /api/scan/breakout-setups`; page **About to Break Out** (`frontend/src/pages/AboutToBreakout.tsx`). Parameters: `SignalConfig` **1.3.0**, hash `a864a585683e1f22` (states only on a valid 10-day base since 1.3.0 - `docs/first-time-breakout.md`) (`GET /api/config/signals`).
 
 Goal: list stocks **before** the 10-day breakout - closing just below the previous 10-day high - and follow what happens next. The existing 10-day breakout rule (`docs/first-time-breakout.md`) is unchanged; this is a separate state of the latest completed daily candle against the same level.
 
@@ -55,3 +55,7 @@ A daily scan run with SignalConfig 1.0.0 (before this feature) has no setup stat
 
 * Thresholds are initial engineering defaults (the Very Near, expiry and rejection numbers are ASSUMPTIONs); not validated on labelled outcomes. A setup is not a prediction that the breakout will happen.
 * Built and UI-checked on synthetic data only (cloud session without Yahoo / NSE access).
+
+## 1.3.0: setups only on a 10-day base
+
+A state (Approaching, Very Near, Touched, Expired) is reported only when the 10-session window before the latest candle is a base: range <= 3.5 ATR, sideways (drift <= 2 ATR), top zone held >= 3 sessions (`docs/first-time-breakout.md`, "10-day base rule"). The page shows a **10D base** column: sessions the top zone has held and the window range in ATR.

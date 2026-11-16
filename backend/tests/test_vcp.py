@@ -118,7 +118,7 @@ def test_final_contraction_state_and_wide_final(calendar):
 
 
 def test_pivot_is_final_contraction_high_not_base_high(calendar):
-    r, spec = run(calendar, recover=(0.97, 0.97, 0.985))
+    r, spec = run(calendar, recover=(0.97, 0.98, 0.985))  # v3: each rally recovers >= 70 % of its pullback
     assert r["pivot"] < r["first_high"] and r["pivot"] == pytest.approx(pivot_high(spec) + spec.wick)
     assert r["geometry"]["pivot"]["p"] == r["pivot"] and r["geometry"]["pivot"]["t"] == r["contraction_list"][-1]["start_t"]
 
@@ -193,7 +193,7 @@ def test_score_components_and_weights(calendar):
 def test_geometry_is_a_contraction_structure_not_a_box(calendar):
     r, spec = run(calendar, tail=[(1.02, 2.5e5)])
     g = r["geometry"]
-    assert g["schema_version"] == "vcp-2.0" and len(g["contractions"]) == 3
+    assert g["schema_version"] == "vcp-3.0" and len(g["contractions"]) == 3 and g["shape"] in ("vcp", "cup_with_handle")
     for el in g["contractions"]:
         assert el["t_high"] < el["t_low"] and el["p_high"] > el["p_low"] and el["label"].startswith("T") and el["depth_pct"] > 0
     assert [el["final"] for el in g["contractions"]] == [False, False, True]
@@ -226,10 +226,95 @@ def test_random_walks_rarely_produce_qualified_vcps(calendar):
 
 
 def test_status_labels_are_the_spec_states():
-    assert list(STATUS_LABELS.values()) == ["Developing", "Forming", "Final Contraction", "Near Pivot", "Breakout", "Failed Breakout", "Invalidated"]
+    assert list(STATUS_LABELS.values()) == ["Developing", "Forming", "Final Contraction", "Near Pivot", "Breakout", "Extended", "Failed Breakout", "Invalidated"]
 
 
 def test_spec_default_thresholds():
     assert (CFG.min_contractions, CFG.max_contractions, CFG.min_base_bars, CFG.max_base_bars) == (2, 6, 15, 120)
     assert (CFG.max_next_contraction_ratio, CFG.min_contraction_pct, CFG.max_final_contraction_pct, CFG.final_volume_ratio) == (0.75, 3.0, 10.0, 0.70)
     assert (CFG.near_pivot_pct, CFG.breakout_volume_ratio) == (3.0, 1.5)
+    # 3.0.0 (live chart review 2026-11-15)
+    assert (CFG.min_recovery_frac, CFG.min_decline_bars, CFG.min_contraction_span_bars, CFG.min_final_contraction_bars) == (0.70, 2, 5, 5)
+    assert CFG.trend_template_required and (CFG.tt_max_below_52w_high_pct, CFG.tt_min_above_52w_low_pct, CFG.extended_pct) == (25.0, 30.0, 5.0)
+
+
+# ---------------------------------------------------------------- v3 (VCPConfig 3.0.0)
+
+
+def test_one_candle_dip_is_not_a_contraction(calendar):
+    # T2 drops in a single candle (a wick-like shakeout): v3 keeps it inside the running contraction
+    r, _ = run(calendar, depths=(20, 10, 5), down_bars=(8, 1, 4), up_bars=(8, 6, 5))
+    assert r is None or r["contractions"] < 3 or all(c["bars"] >= CFG.min_decline_bars for c in r["contraction_list"][:-1])
+    legacy = VCPConfig(min_decline_bars=1, min_contraction_span_bars=1)
+    r2, _ = run(calendar, cfg=legacy, depths=(20, 10, 5), down_bars=(8, 1, 4), up_bars=(8, 6, 5))
+    assert r2 is not None and r2["contractions"] == 3  # the old rule counted it
+
+
+def test_final_contraction_must_last_before_it_qualifies(calendar):
+    # final contraction 1 down + 2 up = 3 sessions old: structure fine, but not a week yet
+    young, _ = run(calendar, depths=(20, 10, 5), down_bars=(8, 6, 1), up_bars=(8, 6, 2))
+    assert not young["qualified"] and gate(young, "final_contraction_duration")["passed"] is False
+    assert young["status"] == "forming" and "final contraction duration" in young["status_reason"]
+    grown, _ = run(calendar)
+    assert gate(grown, "final_contraction_duration")["passed"] is True and gate(grown, "final_contraction_duration")["value"] >= CFG.min_final_contraction_bars
+
+
+def test_weak_rally_does_not_start_a_new_contraction(calendar):
+    # T1 recovers only to 0.88 x its high (40 % of a 20 % pullback): not a new contraction high
+    r, _ = run(calendar, depths=(20, 10, 5), recover=(0.88, 0.99, 0.985))
+    assert r is None or r["contractions"] < 3 or not r["qualified"]
+
+
+def _downtrend_then_base(calendar, cfg=CFG):
+    spec = VCPSpec()
+    f = vcp_frame(spec, calendar)
+    c = f["close"].to_numpy().copy()
+    c[: spec.flat_bars] = np.linspace(260.0, c[spec.flat_bars], spec.flat_bars)  # long decline instead of a flat history
+    o = np.concatenate([[c[0]], c[:-1]])
+    g = f.assign(open=o, close=c, high=np.maximum(o, c) + spec.wick, low=np.minimum(o, c) - spec.wick)
+    return detect_vcp(g, cfg, symbol="DOWN", config_hash="h")
+
+
+def test_trend_template_rejects_a_base_outside_a_stage2_uptrend(calendar):
+    assert _downtrend_then_base(calendar) is None  # 60 % below the 52-week high, SMA150 < SMA200
+    off = _downtrend_then_base(calendar, VCPConfig(trend_template_required=False))
+    assert off is not None and off["contractions"] == 3  # the same structure without the template gate
+
+
+def test_trend_template_reported_on_a_valid_base(calendar):
+    r, _ = run(calendar)
+    tt = gate(r, "trend_template")
+    assert tt["passed"] is True and tt["basis"] == "source" and tt["value"].startswith("7/7")
+    m = r["metrics"]
+    assert m["trend_template_passed"] is True and set(m["trend_template_checks"]) == {"close_above_sma50", "close_above_sma150_sma200", "sma150_above_sma200", "sma50_above_sma150_sma200", "sma200_rising", "above_52w_low", "near_52w_high"}
+    assert any("Trend Template" in line for line in r["explanation"])
+
+
+def test_extended_without_volume_is_not_near_pivot(calendar):
+    r, _ = run(calendar, tail=[(1.02, 0.6e5), (1.045, 0.6e5), (1.075, 0.6e5)])
+    assert r["status"] == "extended" and r["extended"] is True and r["pivot_crossed_low_volume"] is True
+    assert r["pivot_distance_pct"] < -CFG.extended_pct and "buy zone" in r["status_reason"]
+    near, _ = run(calendar, tail=[(1.02, 0.6e5)])
+    assert near["status"] == "near_pivot" and near["extended"] is False
+
+
+def test_later_volume_close_in_the_buy_zone_is_the_breakout(calendar):
+    r, _ = run(calendar, tail=[(1.01, 0.6e5), (1.025, 2.5e5)])
+    assert r["status"] == "breakout" and r["breakout_age"] == 0 and r["breakout_volume_ratio"] >= CFG.breakout_volume_ratio
+    assert r["metrics"]["first_cross_time"] is not None and any("lacked breakout volume" in line for line in r["explanation"])
+    # the same volume far above the buy zone is not a breakout: extended
+    far, _ = run(calendar, tail=[(1.01, 0.6e5), (1.09, 2.5e5)])
+    assert far["status"] == "extended"
+
+
+def test_breakout_that_runs_beyond_the_buy_zone_is_flagged(calendar):
+    r, _ = run(calendar, tail=[(1.02, 2.5e5), (1.05, 1.5e5), (1.08, 1.5e5)])
+    assert r["status"] == "breakout" and r["extended"] is True
+
+
+def test_cup_with_handle_shape_tag(calendar):
+    cup, _ = run(calendar, depths=(25, 8), recover=(0.99, 0.985), down_bars=(18, 4), up_bars=(18, 5), volumes=(1e5, 0.5e5))
+    assert cup["qualified"] and cup["shape"] == "cup_with_handle" and cup["shape_label"] == "Cup with handle"
+    assert all(cup["metrics"]["shape_checks"].values()) and cup["geometry"]["shape"] == "cup_with_handle"
+    plain, _ = run(calendar)  # T1 spans 16 sessions: too short for a cup
+    assert plain["shape"] == "vcp" and plain["metrics"]["shape_checks"]["cup_span"] is False

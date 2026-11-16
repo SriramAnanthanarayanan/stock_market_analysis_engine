@@ -38,3 +38,13 @@ Symbol, company, F&O, type, 52-week high / low, close, distance from the level, 
 ## Tests
 
 `tests/test_week52.py` (9): 252-session high breakout and low breakdown, current candle excluded (a high 253 sessions back is outside, 252 inside), intraday touch vs confirmed close, INSUFFICIENT_HISTORY, basis reporting, as-of unchanged by later candles, NSE report parser (tolerant / strict), store / lookup / match / mismatch / unavailable / error. API views: `tests/test_api_signals.py`.
+
+## Tests and approach states - SignalConfig 1.4.0 (2026-11-16)
+
+Every 52-week state row also carries:
+- the separate tests of the 52-week high (highs within 3 %, at least 10 sessions apart), with their dates;
+- the test score (3+ tests rank higher);
+- lows rising;
+- the approach state: Approaching (within 5 %), Very Near (within 2 %) or Touched (intraday at or above the high, close below).
+
+The page has a view **About to break the 52-week high**: `GET /api/scan/52week?view=approach&min_tests=`. Rules: `docs/level-engine.md`.

@@ -162,10 +162,19 @@ export interface Week52State extends StockRef {
   note?: string;
   adjustment_basis: string;
   official: OfficialCheck;
+  /** SignalConfig 1.4.0 (shared level engine): separate tests of the 52-week high and the approach state. */
+  high_tests?: number;
+  high_test_times?: string[];
+  tests_score?: number;
+  lows_rising?: boolean | null;
+  approach_state?: "approaching" | "very_near" | "touched" | null;
+  approach_label?: string | null;
+  distance_below_high_pct?: number | null;
+  reference_start?: string;
 }
 
 export interface Week52Result extends AdvResult<FreshBreakout | Week52State> {
-  view: "events" | "touch" | "state";
+  view: "events" | "touch" | "state" | "approach";
   insufficient_history: number;
   official_report_date: string | null;
 }
@@ -237,6 +246,11 @@ export interface SetupRow extends StockRef {
   volume_ratio: number | null;
   range_10d_pct: number | null;
   sessions_in_setup: number;
+  /** SignalConfig 1.3.0: the 10-session window as a base (range and drift in ATR, sessions the top zone has held). */
+  base_range_atr?: number | null;
+  base_drift_atr?: number | null;
+  base_level_age?: number | null;
+  base_tests?: number | null;
   event_time?: string;
   event_age?: number;
   rs: number | null;
@@ -251,7 +265,7 @@ export interface SetupResult extends AdvResult<SetupRow> {
 }
 
 // ---------------------------------------------------------------- IPO base breakout
-export type IpoStatus = "too_young" | "discovery_phase" | "base_forming" | "base_validated" | "near_pivot" | "breakout" | "failed_breakout" | "invalidated";
+export type IpoStatus = "too_young" | "discovery_phase" | "base_forming" | "base_validated" | "near_pivot" | "breakout" | "failed_breakout" | "invalidated" | "cheat_entry" | "ipo_low_broken";
 
 export interface IpoGeometry {
   schema_version: string;
@@ -300,6 +314,14 @@ export interface IpoRow extends StockRef {
   failure: IpoGeometry["failure"];
   last_close: number | null;
   last_candle_time: string | null;
+  /** NSE past public issues (display only). issue_price is on the chart's split-adjusted
+   * basis (raw issue price / split_factor); null when not comparable (see issue_price_note). */
+  issue_price?: number | null;
+  issue_price_raw?: number | null;
+  split_factor?: number | null;
+  vs_issue_pct?: number | null;
+  ipo_security_type?: string | null;
+  issue_price_note?: string | null;
   explanation: string[];
   geometry?: IpoGeometry;
 }
@@ -414,14 +436,95 @@ export interface MultiYearStudy {
   note?: string;
 }
 
+/** SignalConfig 1.4.0: below a resistance that has capped the stock for years, about to break it. */
+export interface MultiYearApproach extends StockRef {
+  state: "approaching" | "very_near" | "touched";
+  state_label: string;
+  time: string;
+  t: number;
+  close: number;
+  level: number;
+  level_t: number;
+  level_time: string;
+  base_start_t: number;
+  base_start_time: string;
+  base_years: number;
+  base_starts_at_data_start: boolean;
+  base_low: number;
+  base_depth_pct: number;
+  all_time_high_in_data: boolean;
+  highest_since_time: string | null;
+  years_since_higher: number | null;
+  zone_tests: number;
+  zone_test_times: string[];
+  tests_score: number;
+  lows_rising: boolean | null;
+  distance_pct: number;
+  distance_atr: number | null;
+  volume_ratio: number | null;
+  explanation: string[];
+}
+
+export interface MultiYearApproachResult extends AdvResult<MultiYearApproach> {
+  state_labels: Record<string, string>;
+}
+
 export const multiYearApi = {
+  approach: (q: Q) => request<MultiYearApproachResult>(`/api/scan/multiyear-approach${qs(q)}`),
   scan: (q: Q) => request<MultiYearResult>(`/api/scan/multiyear-breakouts${qs(q)}`),
   symbol: (symbol: string, asof?: string | null) => request<{ symbol: string; source: string; events: MultiYearEvent[]; data_start: string | null; zone_pct: number; note?: string }>(`/api/multiyear/symbol${qs({ symbol, asof })}`),
   study: (q: Q) => request<MultiYearStudy>(`/api/multiyear/study${qs(q)}`),
 };
 
+// ---------------------------------------------------------------- Darvas box (SignalConfig 1.4.0)
+export type DarvasState = "forming_top" | "forming_bottom" | "in_box" | "near_top" | "breakout" | "breakdown";
+
+export interface DarvasBoxGeo {
+  t_start: number;
+  i_start: number;
+  t_end: number;
+  i_end: number;
+  top: number;
+  bottom: number | null;
+  outcome: "open" | "breakout" | "breakdown";
+  t_bottom: number | null;
+}
+
+export interface DarvasRow extends StockRef {
+  state: DarvasState;
+  state_label: string;
+  time: string;
+  close: number;
+  box_top: number;
+  box_bottom: number | null;
+  box_depth_pct: number | null;
+  box_start_time: string;
+  box_start_t: number;
+  box_sessions: number;
+  distance_to_top_pct: number;
+  top_tests: number;
+  tests_score: number;
+  lows_rising: boolean | null;
+  boxes_stacked: number;
+  event: { index: number; time: string; t: number; close: number; volume_ratio: number | null; volume_ok: boolean; sessions_ago: number } | null;
+  partial_history: boolean;
+  /** A breakout whose latest close is back at or below the broken top (flagged, still a breakout by the rules). */
+  back_below_top?: boolean;
+  explanation: string[];
+  geometry?: { schema_version: string; boxes: DarvasBoxGeo[]; current: DarvasBoxGeo };
+}
+
+export interface DarvasResult extends AdvResult<DarvasRow> {
+  state_labels: Record<string, string>;
+}
+
+export const darvasApi = {
+  scan: (q: Q) => request<DarvasResult>(`/api/scan/darvas${qs(q)}`),
+  symbol: (symbol: string, asof?: string | null) => request<{ symbol: string; source: string; darvas: DarvasRow | null; note?: string }>(`/api/darvas/symbol${qs({ symbol, asof })}`),
+};
+
 // ---------------------------------------------------------------- VCP
-export type VcpStatus = "developing" | "forming" | "final_contraction" | "near_pivot" | "breakout" | "failed_breakout" | "invalidated";
+export type VcpStatus = "developing" | "forming" | "final_contraction" | "near_pivot" | "breakout" | "extended" | "failed_breakout" | "invalidated";
 
 export interface VcpContraction {
   seq: number;
@@ -444,7 +547,7 @@ export interface VcpContraction {
   provisional: boolean;
 }
 
-/** VCP chart geometry (schema vcp-2.0): the successive contractions T1..Tn as swing
+/** VCP chart geometry (schema vcp-3.0): the successive contractions T1..Tn as swing
  *  legs, the final contraction, pivot, volume dry-up window and breakout - not a box. */
 export interface VcpGeometry {
   schema_version: string;
@@ -457,6 +560,8 @@ export interface VcpGeometry {
   breakout: { i: number; t: number; time: string; close: number; volume?: number | null; volume_ratio: number | null; volume_ok: boolean } | null;
   event: { i: number; t: number; status: string } | null;
   last_candle: { i: number; t: number; p: number };
+  /** vcp-3.0: descriptive shape tag ("vcp" | "cup_with_handle"), never a gate. */
+  shape?: string;
 }
 
 export interface StageContext {
@@ -511,6 +616,10 @@ export interface VcpRow extends StockRef {
   trend_context_ok?: boolean | null;
   pivot_crossed_low_volume?: boolean;
   breakout_confirmation?: string | null;
+  /** VCPConfig 3.0.0: close beyond the buy zone above the pivot (Extended status, or a breakout that ran). */
+  extended?: boolean;
+  shape?: string;
+  shape_label?: string;
   geometry?: VcpGeometry;
   contraction_list?: VcpContraction[];
   config_version: string;

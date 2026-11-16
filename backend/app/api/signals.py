@@ -25,7 +25,7 @@ from ..config import (
     describe_config,
 )
 from ..models import Timeframe, Universe
-from ..scanner import find_latest_scan
+from ..scanner import find_latest_scan, ipo_clause
 from ..services import Services
 from ..signals import nse52w
 from ..signals.crossing import first_in_lookback
@@ -46,7 +46,11 @@ def _check_asof(asof: date | None) -> None:
         raise HTTPException(status_code=422, detail="asof cannot be in the future")
 
 
-def universe_clause(t, universe: str):
+def universe_clause(t, universe: str, engine=None):
+    if universe == "ipo":
+        if engine is None:
+            raise ValueError("universe 'ipo' needs the engine")
+        return ipo_clause(t, engine)
     if universe == "nifty500":
         return t.c.in_nifty500 == 1
     if universe == "fno":
@@ -86,7 +90,7 @@ def evidence_rows(s: Services, scan_id: str, universe: str = "all", sources: tup
     q = select(t).where(t.c.scan_id == scan_id)
     if sources:
         q = q.where(t.c.source.in_(sources))
-    uc = universe_clause(t, universe)
+    uc = universe_clause(t, universe, s.engine)
     if uc is not None:
         q = q.where(uc)
     if symbol:
@@ -327,11 +331,12 @@ def scan_52week(
     request: Request,
     universe: Universe = "all",
     asof: date | None = None,
-    view: Literal["events", "touch", "state"] = "events",
+    view: Literal["events", "touch", "state", "approach"] = "events",
     direction: Literal["bullish", "bearish", "both"] = "both",
     confirm: int = Query(1, ge=1, le=2),
     max_age: int = Query(0, ge=0, le=20),
     near_pct: float | None = Query(None, ge=0, le=50, description="state view: within this % of the 52-week high (bullish) / low (bearish)"),
+    min_tests: int = Query(0, ge=0, le=50, description="approach view: minimum separate tests of the 52-week high"),
     include_insufficient: bool = False,
     min_volume_ratio: float | None = Query(None, ge=0, le=100),
     fno: Literal["YES", "NO", "UNKNOWN"] | None = None,
@@ -351,7 +356,21 @@ def scan_52week(
     ref_date = next((m.get("time", "")[:10] for m in states.values() if m.get("time")), None)
     official = nse52w.lookup(s.engine, ref_date) if ref_date else {}
     items = []
-    if view == "state":
+    if view == "approach":
+        # SignalConfig 1.4.0 (shared level engine): below the 52-week high and about to break it
+        rank = {"touched": 0, "very_near": 1, "approaching": 2}
+        out = []
+        for sym, m in states.items():
+            if m.get("status") != "ok" or not m.get("approach_state"):
+                continue
+            ev = state_rows[sym]
+            if fno and ev["fno_status"] != fno:
+                continue
+            if (m.get("high_tests") or 0) < min_tests:
+                continue
+            out.append({"symbol": sym, **m, "company": ev["company"], "fno_status": ev["fno_status"], "in_nifty500": ev["in_nifty500"], "official": nse52w.compare(m.get("high_52w"), m.get("low_52w"), official.get(sym))})
+        items = sorted(out, key=lambda r: (rank.get(r.get("approach_state"), 9), -(r.get("high_tests") or 0), r.get("distance_below_high_pct") or 0))
+    elif view == "state":
         out = []
         for sym, m in states.items():
             it = {"symbol": sym, **m}

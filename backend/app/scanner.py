@@ -23,7 +23,7 @@ from sqlalchemy import Engine, and_, func, select, update
 from . import database as db
 from .config import TIMEFRAME_SOURCE_INTERVAL, config_hash, config_to_dict
 from .data.ohlcv import prepare_series
-from .data.universe import StockInfo
+from .data.universe import StockInfo, recent_ipo_set
 from .analytics.sr import compute_zones, nearest, zone_record
 from .lifecycle.tracking import Tracker
 from .patterns.base import SeriesContext
@@ -39,6 +39,7 @@ UNIVERSE_SUPERSETS: dict[str, list[str]] = {
     "nifty500": ["nifty500", "all"],
     "fno": ["fno", "all"],
     "non_fno": ["non_fno", "nifty500", "all"],
+    "ipo": ["ipo", "all"],
     "all": ["all"],
 }
 ACTIVE_STATES = ("queued", "running")
@@ -76,6 +77,7 @@ class ScanManager:
         self._lock = threading.Lock()
         self._active: dict[tuple, str] = {}
         self._futures: dict[str, Future] = {}
+        self._post: set[str] = set()  # finished scans whose confluence snapshot is still being built
         self._pool = ThreadPoolExecutor(max_workers=max(1, services.settings.scan_workers), thread_name_prefix="scan")
         self.tracker = Tracker(services.engine, services.settings.outcome_horizons, services.store.price_basis)
 
@@ -139,6 +141,11 @@ class ScanManager:
             ids = list(self._active.values())
         return [s for s in (get_scan(self.s.engine, i) for i in ids) if s]
 
+    def postprocessing(self) -> set[str]:
+        """Completed scans whose confluence snapshot is still being written."""
+        with self._lock:
+            return set(self._post)
+
     def active_for(self, universe: str, timeframe: str, asof: date | None) -> dict[str, Any] | None:
         with self._lock:
             ids = [sid for (u, tf, a, _p), sid in self._active.items() if u == universe and tf == timeframe and a == asof]
@@ -178,7 +185,13 @@ class ScanManager:
         if done and req.timeframe in ("1d", "1w"):
             from .confluence.service import refresh_after_scan
 
-            refresh_after_scan(self.s, req.universe, req.timeframe, req.asof)
+            with self._lock:
+                self._post.add(scan_id)
+            try:
+                refresh_after_scan(self.s, req.universe, req.timeframe, req.asof)
+            finally:
+                with self._lock:
+                    self._post.discard(scan_id)
 
     def _execute(self, scan_id: str, req: ScanRequest) -> None:
         s = self.s
@@ -444,6 +457,8 @@ class ScanManager:
             self._store_ipo(st, frame, pub)
             pub.week52(outs.w52_events, outs.w52_touches, outs.w52_state, sv, sh)
             pub.multiyear(outs.multiyear, scfg.multiyear_store_sessions, sv, sh)
+            pub.multiyear_approach(outs.multiyear_approach, sv, sh)
+            pub.darvas(outs.darvas, sv, sh)
             self._store_vcp(scan_id, st, frame, ser, pub)
         pub.volume_shocks(outs.shocks, sv, sh)
         pub.volume_state(outs.volume_state, sv, sh)
@@ -735,8 +750,15 @@ def find_latest_scan(
     return None
 
 
-def _universe_clause(universe: str):
+def ipo_clause(t, engine: Engine):
+    """Rows of recent-IPO symbols (today's window; universe ``ipo``)."""
+    return t.c.symbol.in_(sorted(recent_ipo_set(engine)))
+
+
+def _universe_clause(universe: str, engine: Engine):
     t = db.detections
+    if universe == "ipo":
+        return ipo_clause(t, engine)
     if universe == "nifty500":
         return t.c.in_nifty500 == 1
     if universe == "fno":
@@ -772,7 +794,7 @@ def scan_matches(
 ) -> list[dict[str, Any]]:
     t = db.detections
     q = select(t).where(t.c.scan_id == scan_id).where(t.c.quality >= min_quality)
-    clause = _universe_clause(universe)
+    clause = _universe_clause(universe, engine)
     if clause is not None:
         q = q.where(clause)
     if patterns:
@@ -790,7 +812,7 @@ def scan_matches(
 
 def scan_counts(engine: Engine, scan_id: str, universe: str = "all") -> dict[str, Any]:
     t = db.detections
-    clause = _universe_clause(universe)
+    clause = _universe_clause(universe, engine)
     base = [t.c.scan_id == scan_id] + ([clause] if clause is not None else [])
     out: dict[str, Any] = {}
     with engine.connect() as conn:
@@ -809,6 +831,8 @@ def scan_symbol_counts(engine: Engine, scan_id: str, universe: str = "all") -> d
         q = q.where(t.c.fno_status == "YES")
     elif universe == "non_fno":
         q = q.where(and_(t.c.in_nifty500 == 1, t.c.fno_status == "NO"))
+    elif universe == "ipo":
+        q = q.where(ipo_clause(t, engine))
     with engine.connect() as conn:
         return {k: v for k, v in conn.execute(q.group_by(t.c.status)).all()}
 

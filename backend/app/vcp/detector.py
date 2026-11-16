@@ -1,4 +1,13 @@
-"""Volatility Contraction Pattern (VCP) on completed daily candles - detector v2.
+"""Volatility Contraction Pattern (VCP) on completed daily candles - detector v3.
+
+v3 (VCPConfig 3.0.0, live chart review 2026-11-15): a contraction must last
+(decline >= ``min_decline_bars``, high -> next high >= ``min_contraction_span_bars``,
+final contraction >= ``min_final_contraction_bars`` before it can qualify); each
+rally must recover >= ``min_recovery_frac`` (0.70) of the pullback; Minervini's
+Trend Template is a candidate filter at the base start and a gate at the base end;
+a close far above the pivot without a volume breakout is **Extended**, and a
+later volume close inside the buy zone is still a breakout; the result carries a
+descriptive cup-with-handle shape tag.
 
 Methodology (Mark Minervini, *Trade Like a Stock Market Wizard*, 2013, ch. 10
 "Mastering the Volatility Contraction Pattern"; *Think & Trade Like a Champion*,
@@ -70,12 +79,22 @@ STATUS_LABELS = {
     "final_contraction": "Final Contraction",
     "near_pivot": "Near Pivot",
     "breakout": "Breakout",
+    "extended": "Extended",
     "failed_breakout": "Failed Breakout",
     "invalidated": "Invalidated",
 }
-STATUS_RANK = {"breakout": 0, "near_pivot": 1, "final_contraction": 2, "forming": 3, "failed_breakout": 4, "developing": 5, "invalidated": 6}
-QUALIFIED_STATUSES = ("final_contraction", "near_pivot", "breakout", "failed_breakout")
-SCHEMA = "vcp-2.0"
+STATUS_RANK = {"breakout": 0, "near_pivot": 1, "final_contraction": 2, "forming": 3, "extended": 4, "failed_breakout": 5, "developing": 6, "invalidated": 7}
+QUALIFIED_STATUSES = ("final_contraction", "near_pivot", "breakout", "extended", "failed_breakout")
+SCHEMA = "vcp-3.0"
+TT_LABELS = {
+    "close_above_sma50": "close > SMA50",
+    "close_above_sma150_sma200": "close > SMA150 & SMA200",
+    "sma150_above_sma200": "SMA150 > SMA200",
+    "sma50_above_sma150_sma200": "SMA50 > SMA150 & SMA200",
+    "sma200_rising": "SMA200 rising",
+    "above_52w_low": "above 52W low",
+    "near_52w_high": "near 52W high",
+}
 
 
 def _r(x: Any, nd: int = 4) -> float | None:
@@ -145,6 +164,45 @@ def _final_volume(ctx: _Ctx, final: Contraction, end: int) -> tuple[float | None
     return mean, a50, (mean / a50) if (mean is not None and a50) else None
 
 
+def _trend_template(ctx: _Ctx, i: int, price: float | None = None) -> dict[str, Any]:
+    """Minervini Trend Template at candle i, from candles 0..i only (no look-ahead).
+
+    ``price`` is the price judged against the averages and the 52-week range: the close
+    of candle i by default; at the base end the pivot (the buy point - a final
+    contraction may dip under the 50-day average without breaking the uptrend). A check
+    without enough history is None (skipped, listed as partial); price > SMA50 and the
+    52-week-high distance are always required. The IBD RS-rating criterion is not used
+    (no such rating here)."""
+    cfg = ctx.cfg
+    c = ctx.c[: i + 1]
+    x = float(c[-1]) if price is None else float(price)
+    s50, s150, s200 = _sma(c, 50), _sma(c, 150), _sma(c, 200)
+    r = cfg.tt_sma200_rising_sessions
+    s200_prev = float(np.mean(c[-200 - r : -r])) if len(c) >= 200 + r else None
+    w = cfg.tt_52w_sessions
+    hi52 = float(np.max(ctx.h[max(0, i + 1 - w) : i + 1]))
+    lo52 = float(np.min(ctx.l[max(0, i + 1 - w) : i + 1]))
+    checks: dict[str, bool | None] = {
+        "close_above_sma50": None if s50 is None else bool(x > s50),
+        "close_above_sma150_sma200": None if s200 is None else bool(x > s150 and x > s200),
+        "sma150_above_sma200": None if s200 is None else bool(s150 > s200),
+        "sma50_above_sma150_sma200": None if s200 is None else bool(s50 > s150 and s50 > s200),
+        "sma200_rising": None if (s200 is None or s200_prev is None) else bool(s200 > s200_prev),
+        "above_52w_low": bool(x >= lo52 * (1.0 + cfg.tt_min_above_52w_low_pct / 100.0)),
+        "near_52w_high": bool(x >= hi52 * (1.0 - cfg.tt_max_below_52w_high_pct / 100.0)),
+    }
+    passed = checks["close_above_sma50"] is not None and all(v is not False for v in checks.values())
+    failed = [TT_LABELS[k] for k, v in checks.items() if v is False]
+    skipped = [TT_LABELS[k] for k, v in checks.items() if v is None]
+    ok = sum(v is True for v in checks.values())
+    summary = f"{ok}/{len(checks)} pass" + (f"; fail: {', '.join(failed)}" if failed else "") + (f"; n/a (history): {', '.join(skipped)}" if skipped else "")
+    return {
+        "passed": bool(passed), "checks": checks, "summary": summary, "partial_history": bool(skipped) or i + 1 < w,
+        "sma50": s50, "sma150": s150, "sma200": s200, "high_52w": hi52, "low_52w": lo52,
+        "from_52w_high_pct": (hi52 - x) / hi52 * 100.0, "above_52w_low_pct": (x / lo52 - 1.0) * 100.0,
+    }
+
+
 def _gates(ctx: _Ctx, cons: list[Contraction], s0: int, end: int) -> list[dict[str, Any]]:
     """Structural gates of the base s0..end with these contractions."""
     cfg = ctx.cfg
@@ -153,12 +211,18 @@ def _gates(ctx: _Ctx, cons: list[Contraction], s0: int, end: int) -> list[dict[s
     def add(name: str, passed: bool | None, value: Any, rule: str, basis: str = "engineering") -> None:
         g.append({"name": name, "passed": passed, "value": value, "rule": rule, "basis": basis})
 
+    if cfg.trend_template_required:
+        tt = _trend_template(ctx, end, cons[-1].hi if cons else None)
+        add("trend_template", tt["passed"], tt["summary"], f"Minervini Trend Template at the base end, judged at the pivot price (pivot > SMA50 > SMA150 > SMA200, SMA200 rising, >= {cfg.tt_min_above_52w_low_pct} % above the 52W low, within {cfg.tt_max_below_52w_high_pct} % of the 52W high)", "source")
+
     nc = len(cons)
     add("contraction_count", cfg.min_contractions <= nc <= cfg.max_contractions, nc, f"{cfg.min_contractions}-{cfg.max_contractions} contractions (each >= {cfg.min_contraction_pct} %)", "source")
     ratios = [cons[i + 1].depth_pct / cons[i].depth_pct for i in range(nc - 1)]
     add("progressive_contraction", bool(ratios) and all(r <= cfg.max_next_contraction_ratio for r in ratios), [round(r, 3) for r in ratios], f"each depth <= {cfg.max_next_contraction_ratio} x the previous (T1 > T2 > ...)")
     final = cons[-1] if cons else None
     add("tight_final_contraction", final is not None and final.depth_pct <= cfg.max_final_contraction_pct, _r(final.depth_pct, 2) if final else None, f"final depth <= {cfg.max_final_contraction_pct} %")
+    fin_bars = (end - final.hi_i) if final else None
+    add("final_contraction_duration", fin_bars is not None and fin_bars >= cfg.min_final_contraction_bars, fin_bars, f"final contraction lasts >= {cfg.min_final_contraction_bars} sessions (its high to the base end)")
     fr = _final_volume(ctx, final, end)[2] if final else None
     add("volume_dry_up", None if fr is None else fr <= cfg.final_volume_ratio, _r(fr, 3), f"final contraction mean volume <= {cfg.final_volume_ratio} x the 50-session average before it")
     vf = _vol_stats(ctx, final.hi_i + 1, final.lo_i)[0] if final else None
@@ -213,7 +277,9 @@ def _walk(ctx: _Ctx, s0: int, highs: list[int]) -> dict[str, Any]:
                 out.update(pivot=cur, pivot_i=cur_i, live=con)
                 out["invalid"] = (j, f"a swing high {p:.2f} exceeded the base high {H0:.2f} by more than {cfg.base_high_tolerance_pct} % before the VCP qualified")
                 return out
-            if con.depth_pct < cfg.min_contraction_pct:
+            # A pullback too shallow, too quick (one-candle wick) or too short in time is not a
+            # contraction of its own (v3): it stays part of the running contraction.
+            if con.depth_pct < cfg.min_contraction_pct or (con.lo_i - con.hi_i) < cfg.min_decline_bars or (i - cur_i) < cfg.min_contraction_span_bars:
                 if p >= cur:
                     cur_i, cur = i, p
                 continue
@@ -387,6 +453,8 @@ def detect_vcp(frame: pd.DataFrame, cfg: VCPConfig, symbol: str = "", atr: np.nd
         advance = (h[s0] / prior.min() - 1.0) * 100.0
         if advance < cfg.prior_advance_min_pct:
             continue
+        if cfg.trend_template_required and not _trend_template(ctx, s0)["passed"]:
+            continue  # v3: the base must start inside a Stage 2 uptrend (Minervini Trend Template)
         res = _finish(ctx, s0, _walk(ctx, s0, highs), advance, symbol, config_hash)
         if res is not None:
             cands.append(res)
@@ -408,29 +476,58 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
     brk = walk["breakout"]
     breakout_info = None
     event_i = None
-    flags: dict[str, Any] = {"pivot_crossed_low_volume": False, "confirmation": None}
+    flags: dict[str, Any] = {"pivot_crossed_low_volume": False, "confirmation": None, "extended": False, "first_cross_time": None}
+
+    def vol_ratio(i: int) -> float | None:
+        a = _avg_prev(ctx.v, i, cfg.volume_avg_lookback)
+        return (ctx.v[i] / a) if (a and np.isfinite(ctx.v[i])) else None
+
     if brk is not None:
         b = brk["i"]
         cons: list[Contraction] = brk["contractions"]
         pivot, pivot_i, gates = brk["pivot"], brk["pivot_i"], brk["gates"]
         end = b - 1
-        a50 = _avg_prev(ctx.v, b, cfg.volume_avg_lookback)
-        vr = (ctx.v[b] / a50) if (a50 and np.isfinite(ctx.v[b])) else None
+        vr = vol_ratio(b)
         vol_ok = bool(vr is not None and vr >= cfg.breakout_volume_ratio)
+        if not vol_ok:
+            # v3: the first close above the pivot lacked volume. A later close above the pivot
+            # on breakout volume, still inside the buy zone (<= extended_pct above it) and before
+            # the setup failed, is the breakout (volume confirms the move, Minervini).
+            flags["first_cross_time"] = iso(times[b])
+            below = 0
+            for j in range(b + 1, n):
+                if c[j] < cons[-1].lo:
+                    break
+                below = below + 1 if c[j] < pivot else 0
+                if below >= cfg.failed_breakout_closes:
+                    break
+                buf_j = cfg.breakout_buffer_atr * (float(ctx.atr[j]) if np.isfinite(ctx.atr[j]) else 0.0)
+                vrj = vol_ratio(j)
+                if c[j] > pivot + buf_j and (c[j] / pivot - 1.0) * 100.0 <= cfg.extended_pct and vrj is not None and vrj >= cfg.breakout_volume_ratio:
+                    b, vr, vol_ok = j, vrj, True
+                    break
         if n - 1 - b > cfg.post_breakout_track_sessions:
             return None  # an old breakout is history, not a current VCP
         st2, ei2, rs2, conf = _post_breakout(ctx, b, pivot, cons[-1])
+        above_pct = (c[n - 1] / pivot - 1.0) * 100.0
         if vol_ok:
             status, event_i, reason = st2, ei2, rs2
             flags["confirmation"] = conf
+            if status == "breakout" and above_pct > cfg.extended_pct:
+                flags["extended"] = True
+                reason = (reason + "; " if reason else "") + f"the close is {above_pct:.1f} % above the pivot, beyond the {cfg.extended_pct} % buy zone (extended)"
         elif st2 in ("failed_breakout", "invalidated"):
             status, event_i, reason = st2, ei2, rs2
         else:
-            # A close above the pivot without breakout volume is not a breakout (spec): the
-            # setup stays at the pivot, flagged.
-            status = "near_pivot"
+            # A close above the pivot without breakout volume is not a breakout (spec).
             flags["pivot_crossed_low_volume"] = True
-            reason = f"closed above the pivot on {vr if vr is None else round(vr, 2)}x the 50-day average volume (a breakout needs >= {cfg.breakout_volume_ratio}x)"
+            if above_pct > cfg.extended_pct:
+                status = "extended"
+                flags["extended"] = True
+                reason = f"{above_pct:.1f} % above the pivot without a volume breakout (first close above it on {vr if vr is None else round(vr, 2)}x volume; a breakout needs >= {cfg.breakout_volume_ratio}x): beyond the {cfg.extended_pct} % buy zone - no entry, wait for a new base"
+            else:
+                status = "near_pivot"
+                reason = f"closed above the pivot on {vr if vr is None else round(vr, 2)}x the 50-day average volume (a breakout needs >= {cfg.breakout_volume_ratio}x)"
         breakout_info = {"i": b, "t": epoch_s(times[b]), "time": iso(times[b]), "close": _r(c[b]), "volume": _r(ctx.v[b], 1) if np.isfinite(ctx.v[b]) else None, "volume_ratio": _r(vr, 3), "volume_ok": vol_ok, "buffer": _r(brk["buffer"])}
     elif walk["invalid"] is not None:
         j, why = walk["invalid"]
@@ -456,7 +553,11 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
         if _qualified(gates):
             dist = (pivot - c[-1]) / pivot * 100.0
             status = "near_pivot" if dist <= cfg.near_pivot_pct else "final_contraction"
-            if dist < 0:
+            if -dist > cfg.extended_pct:
+                status = "extended"
+                flags["extended"] = True
+                reason = f"the close is {-dist:.1f} % above the pivot (beyond the {cfg.extended_pct} % buy zone) and it crossed before the structure qualified: no entry, wait for a new base"
+            elif dist < 0:
                 reason = "the close is above the pivot, but it crossed before the structure qualified: no breakout signal (needs a new close above the pivot on breakout volume)"
         elif len(cons) >= cfg.min_contractions and progressive:
             status = "forming"
@@ -472,6 +573,8 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
     fin_vol = ctx.v[final.hi_i + 1 : base_end_i + 1]
     dry_days = int(np.sum(np.isfinite(fin_vol) & (fin_vol <= cfg.volume_dry_up_ratio * a50_final))) if a50_final else None
     quality, comps, extra = _score(ctx, cons, H0, pivot, advance, s0, end, dry_days)
+    tt = _trend_template(ctx, base_end_i, final.hi)
+    shape = _shape(cfg, cons, H0, base_end_i)
     base_low = float(np.min(ctx.l[s0 : base_end_i + 1]))
     base_high = float(np.max(ctx.h[s0 : base_end_i + 1]))
     vcp_id = hashlib.sha1(f"{symbol}|1d|{epoch_s(times[s0])}|{chash}".encode()).hexdigest()[:16]
@@ -500,7 +603,7 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
         prev_avg = avg if avg is not None else prev_avg
     last = n - 1
     dist_pct = (pivot - c[last]) / pivot * 100.0
-    explanation = _explain(cfg, status, reason, cons, gates, advance, H0, pivot, breakout_info, dry_days, extra, flags)
+    explanation = _explain(cfg, status, reason, cons, gates, advance, H0, pivot, breakout_info, dry_days, extra, flags, tt, shape)
     swings = []
     for x in clist:
         swings.append({"t": x["start_t"], "i": x["start_i"], "p": x["start_price"], "kind": "high", "label": f"{x['label']} high"})
@@ -529,6 +632,7 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
         "breakout": breakout_info,
         "event": {"i": event_i, "t": epoch_s(times[event_i]), "status": status} if event_i is not None else None,
         "last_candle": {"i": last, "t": epoch_s(times[last]), "p": _r(c[last])},
+        "shape": shape["shape"],
     }
     return {
         "vcp_id": vcp_id,
@@ -564,7 +668,21 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
         "event_time": iso(times[event_i]) if event_i is not None else None,
         "pivot_crossed_low_volume": flags["pivot_crossed_low_volume"],
         "breakout_confirmation": flags["confirmation"],
+        "extended": flags["extended"],
+        "shape": shape["shape"],
+        "shape_label": shape["label"],
         "metrics": {
+            "shape": shape["shape"],
+            "shape_label": shape["label"],
+            "shape_checks": shape["checks"],
+            "extended": flags["extended"],
+            "first_cross_time": flags["first_cross_time"],
+            "trend_template": tt["summary"],
+            "trend_template_passed": tt["passed"],
+            "trend_template_checks": tt["checks"],
+            "trend_template_partial_history": tt["partial_history"],
+            "from_52w_high_pct": _r(tt["from_52w_high_pct"], 2),
+            "above_52w_low_pct": _r(tt["above_52w_low_pct"], 2),
             "prior_advance_pct": _r(advance, 2),
             "dry_up_days_final": dry_days,
             "final_volume_vs_avg50": _r(extra.get("final_vs_avg50"), 3),
@@ -587,8 +705,35 @@ def _finish(ctx: _Ctx, s0: int, walk: dict[str, Any], advance: float, symbol: st
     }
 
 
-def _explain(cfg: VCPConfig, status: str, reason: str | None, cons: list[Contraction], gates: list[dict[str, Any]], advance: float, H0: float, pivot: float, brk: dict[str, Any] | None, dry_days: int | None, extra: dict[str, Any], flags: dict[str, Any]) -> list[str]:
+def _shape(cfg: VCPConfig, cons: list[Contraction], H0: float, end: int) -> dict[str, Any]:
+    """Descriptive shape tag, never a gate: 'cup_with_handle' when the first contraction is a
+    cup (O'Neil: long enough, 12-35 % deep) and the final one a handle (starts near the cup's
+    left high, shallow, in the upper half of the cup, at least a week long); else 'vcp'."""
+    if len(cons) < 2:
+        return {"shape": "vcp", "label": "VCP", "checks": {}}
+    cup, fin = cons[0], cons[-1]
+    lo_d, hi_d = cfg.cup_depth_range_pct
+    mid = cup.lo + 0.5 * cup.depth
+    checks = {
+        "cup_span": bool(cons[1].hi_i - cup.hi_i >= cfg.cup_min_bars),
+        "cup_depth": bool(lo_d <= cup.depth_pct <= hi_d),
+        "handle_near_rim": bool(fin.hi >= H0 * (1.0 - cfg.cup_rim_tolerance_pct / 100.0)),
+        "handle_depth": bool(fin.depth_pct <= cfg.handle_max_depth_pct),
+        "handle_upper_half": bool(all(x.lo >= mid for x in cons[1:])),
+        "handle_duration": bool(end - fin.hi_i >= cfg.min_final_contraction_bars),
+    }
+    ok = all(checks.values())
+    return {"shape": "cup_with_handle" if ok else "vcp", "label": "Cup with handle" if ok else "VCP", "checks": checks}
+
+
+def _explain(cfg: VCPConfig, status: str, reason: str | None, cons: list[Contraction], gates: list[dict[str, Any]], advance: float, H0: float, pivot: float, brk: dict[str, Any] | None, dry_days: int | None, extra: dict[str, Any], flags: dict[str, Any], tt: dict[str, Any] | None = None, shape: dict[str, Any] | None = None) -> list[str]:
     out = [f"Status: {STATUS_LABELS[status]}" + (f" - {reason}" if reason else "") + "."]
+    if shape is not None:
+        out.append(f"Shape: {shape['label']}" + (" - the first contraction is a cup, the final one its handle (O'Neil; descriptive tag, not a gate)." if shape["shape"] == "cup_with_handle" else " (successive contractions; not a cup-with-handle shape)."))
+    if tt is not None:
+        out.append(f"Trend Template at the base end (judged at the pivot price): {tt['summary']}; pivot {tt['from_52w_high_pct']:.1f} % below the 52-week high, {tt['above_52w_low_pct']:.1f} % above the 52-week low" + (" (shorter history than 52 weeks or 200 days: some checks skipped)" if tt["partial_history"] else "") + ".")
+    if flags.get("first_cross_time") and brk and brk.get("time") != flags["first_cross_time"]:
+        out.append(f"First close above the pivot on {flags['first_cross_time'][:10]} lacked breakout volume; the later volume close inside the buy zone is the breakout.")
     out.append(f"Preceding advance into the base: {advance:.1f} % (needs >= {cfg.prior_advance_min_pct} %, ENGINEERING assumption).")
     depths = " > ".join(f"T{i + 1} {x.depth_pct:.1f} %" for i, x in enumerate(cons))
     out.append(f"Contractions: {depths}" + (" (final low provisional)" if cons and cons[-1].provisional else "") + ".")

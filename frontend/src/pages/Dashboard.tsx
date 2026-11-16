@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useOpenChart } from "../lib/openChart";
 import { fmtBarTime } from "../lib/format";
+import { pollScanActivityNow, useOnScanFinished } from "../lib/scanActivity";
 import { api, exportUrl } from "../api/client";
 import type { HealthResponse, Match, OverviewResponse, PatternInfo, ScanResponse, ScanSummary, Timeframe, Universe } from "../api/types";
 import { ErrorNote } from "../components/common";
@@ -86,6 +87,12 @@ export function Dashboard() {
 
   // Follow a running scan (started here, by the scheduler or at startup).
   const followId = tracked ?? scan?.active_scan?.scan_id ?? null;
+  // Reload when a background scan of this timeframe finishes (startup, after-close job,
+  // scheduler), also when it started after this page was opened.
+  useOnScanFinished(timeframe, asof || null, (s) => {
+    if (s.scan_id !== followId) void load();
+  });
+
   useEffect(() => {
     if (!followId) return;
     let cancelled = false;
@@ -116,6 +123,7 @@ export function Dashboard() {
       const r = await api.refresh({ universe, timeframe, asof: asof || null });
       setTracked(r.scan_id);
       setActive(await api.scanStatus(r.scan_id));
+      pollScanActivityNow();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

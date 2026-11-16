@@ -58,8 +58,10 @@ STATUS_LABELS = {
     "breakout": "Breakout",
     "failed_breakout": "Failed Breakout",
     "invalidated": "Invalidated",
+    "cheat_entry": "Cheat Entry",
+    "ipo_low_broken": "IPO Low Broken",
 }
-STATUS_RANK = {"breakout": 0, "near_pivot": 1, "base_validated": 2, "base_forming": 3, "discovery_phase": 4, "failed_breakout": 5, "too_young": 6, "invalidated": 7}
+STATUS_RANK = {"breakout": 0, "cheat_entry": 1, "near_pivot": 2, "base_validated": 3, "base_forming": 4, "discovery_phase": 5, "failed_breakout": 6, "too_young": 7, "invalidated": 8, "ipo_low_broken": 9}
 
 
 def _r(x: Any, nd: int = 4) -> float | None:
@@ -167,7 +169,14 @@ def _base(h, l, c, v, L: int, j: int, cfg: IPOConfig) -> dict[str, Any] | None:
 def _score(b: dict[str, Any], close: float, cfg: IPOConfig) -> tuple[float, list[dict[str, Any]]]:
     w = cfg.weights
     d = b["depth"]
-    depth_s = 1.0 if 15.0 <= d <= 30.0 else (0.5 + 0.5 * _clamp((d - cfg.min_base_depth_pct) / (15.0 - cfg.min_base_depth_pct)) if d < 15.0 else _clamp(1.0 - 0.4 * (d - 30.0) / max(1e-9, cfg.max_base_depth_pct - 30.0)))
+    if 15.0 <= d <= 30.0:
+        depth_s = 1.0
+    elif d < 15.0:
+        depth_s = 0.5 + 0.5 * _clamp((d - cfg.min_base_depth_pct) / (15.0 - cfg.min_base_depth_pct))
+    elif d <= cfg.deep_base_pct:
+        depth_s = _clamp(1.0 - 0.4 * (d - 30.0) / max(1e-9, cfg.deep_base_pct - 30.0))  # 1 -> 0.6 at 35 %
+    else:  # 1.1.0: a deep IPO base stays valid but scores lower (0.6 -> 0.3 at the maximum)
+        depth_s = _clamp(0.6 - 0.3 * (d - cfg.deep_base_pct) / max(1e-9, cfg.max_base_depth_pct - cfg.deep_base_pct))
     n = b["length"]
     len_s = 1.0 if 25 <= n <= 60 else (0.7 if n < 25 else _clamp(1.0 - 0.5 * (n - 60) / max(1, cfg.max_base_bars - 60)))
     t = len(b["touches"])
@@ -178,7 +187,7 @@ def _score(b: dict[str, Any], close: float, cfg: IPOConfig) -> tuple[float, list
     dist = (b["high"] - close) / b["high"] * 100.0
     prox_s = 1.0 if dist <= cfg.near_pivot_pct else _clamp(1.0 - (dist - cfg.near_pivot_pct) / 7.0)
     comps = [
-        {"name": "depth", "weight": w["depth"], "raw": _r(d, 2), "score": round(depth_s, 4), "formula": "1 at 15-30 % deep; 0.5-1 from 8 to 15 %; down to 0.6 at 35 % (ASSUMPTION)"},
+        {"name": "depth", "weight": w["depth"], "raw": _r(d, 2), "score": round(depth_s, 4), "formula": f"1 at 15-30 % deep; 0.5-1 from 8 to 15 %; down to 0.6 at {cfg.deep_base_pct:g} % and 0.3 at {cfg.max_base_depth_pct:g} % (ASSUMPTION)"},
         {"name": "length", "weight": w["length"], "raw": n, "score": round(len_s, 4), "formula": "1 at 25-60 sessions; 0.7 when shorter; down to 0.5 at the maximum (ASSUMPTION)"},
         {"name": "resistance", "weight": w["resistance"], "raw": t, "score": round(res_s, 4), "formula": "touches of the base high: 2 -> 0.7, 3+ -> 1"},
         {"name": "volume_dry_up", "weight": w["volume_dry_up"], "raw": _r(dry, 3), "score": round(dry_s, 4), "formula": "volume of the last base sessions / discovery-period volume: 1 at <= 0.5, 0 at >= 1"},
@@ -273,6 +282,43 @@ def detect_ipo_base(frame: pd.DataFrame, cfg: IPOConfig, listing_date: date | No
                 status = "near_pivot" if dist <= cfg.near_pivot_pct else "base_validated"
             else:
                 status, reason = "base_forming", "not yet: " + ", ".join(x["name"].replace("_", " ") for x in cur["gates"] if x["passed"] is not True)
+    # ---- 1.1.0: IPO low broken (reference decks: Paytm, Cartrade, Suryoday, Fino - avoid)
+    ipo_low = float(np.min(l[L : d_end + 1]))
+    below = np.flatnonzero(c[d_end + 1 : t + 1] < ipo_low) + d_end + 1 if t > d_end else np.array([], dtype=int)
+    ipo_low_info = {"ipo_low": _r(ipo_low), "first_close_below": iso(times[int(below[0])]) if len(below) else None, "closes_below": int(len(below))}
+    if status not in ("breakout",) and c[t] < ipo_low:
+        status, reason = "ipo_low_broken", f"close {c[t]:.2f} below the IPO low {ipo_low:.2f} (lowest low of the first {cfg.discovery_bars} sessions) - the post-listing support failed"
+        brk = None
+        cur = cur if cur is not None else _base(h, l, c, v, L, n, cfg)
+    # ---- 1.1.0: cheat entry - a tight sub-base inside the bigger base, broken on volume below the pivot
+    cheat = None
+    if status in ("base_forming", "base_validated", "near_pivot") and cur is not None and cur["length"] >= cfg.min_base_bars:
+        W = cfg.cheat_window_bars
+        for j in range(max(L + W + 1, t - cfg.breakout_track_bars), t + 1):
+            win_h, win_l = h[j - W : j], l[j - W : j]
+            Hs, Ls = float(np.max(win_h)), float(np.min(win_l))
+            top_i = j - W + int(np.argmax(win_h))
+            if Hs > cur["high"] * (1.0 - cfg.cheat_min_below_pct / 100.0) or (Hs - Ls) / Hs * 100.0 > cfg.cheat_max_depth_pct or j - top_i < cfg.cheat_min_level_age:
+                continue
+            if Hs < cur["low"] + cfg.cheat_min_position * (cur["high"] - cur["low"]):
+                continue  # a sub-base near the base low is a bounce, not a base within the base
+            if c[j] > Hs and c[j - 1] <= Hs:
+                avg = _mean(v[max(L, j - cfg.volume_avg_bars) : j])
+                vr = (v[j] / avg) if (avg and np.isfinite(v[j])) else None
+                if vr is not None and vr >= cfg.breakout_volume_ratio:
+                    cheat = {"i": j, "t": epoch_s(times[j]), "time": iso(times[j]), "level": _r(Hs), "sub_low": _r(Ls), "sub_start_t": epoch_s(times[j - W]), "volume_ratio": _r(vr, 3), "age": t - j}
+        if cheat is not None and c[t] > cheat["level"]:
+            status, reason = "cheat_entry", f"early entry: close above a tight {cfg.cheat_window_bars}-session sub-base ({cheat['level']}) inside the base, {cheat['age']} sessions ago on {cheat['volume_ratio']}x volume; the IPO base pivot {cur['high']:.2f} is still above (reference: works best when the market is strong)"
+        else:
+            cheat = None
+    # ---- 1.1.0: retest of the breakout level (reported)
+    retest = None
+    if status == "breakout" and brk is not None:
+        piv_b, bi_ = brk["pivot"], brk["i"]
+        for j in range(bi_ + 1, t + 1):
+            if l[j] <= piv_b * (1.0 + cfg.retest_zone_pct / 100.0) and c[j] > piv_b:
+                retest = {"time": iso(times[j]), "t": epoch_s(times[j]), "low": _r(l[j])}
+                break
     base = (brk["base"] if brk is not None else cur)
     quality, comps = _score(base, float(c[t]), cfg) if base is not None else (0.0, [])
     pivot = base["high"] if base is not None else None
@@ -309,8 +355,16 @@ def detect_ipo_base(frame: pd.DataFrame, cfg: IPOConfig, listing_date: date | No
         "breakout_age": breakout["age"] if breakout else None,
         "breakout_volume_ratio": breakout["volume_ratio"] if breakout else None,
         "failure": failure,
+        "ipo_low": ipo_low_info,
+        "cheat_entry": cheat,
+        "retest": retest,
     }
     rec["explanation"] = _explain(rec, cfg)
+    if cheat is not None:
+        rec["explanation"].insert(1, f"Cheat entry: sub-base {cheat['sub_low']} - {cheat['level']} broken on {cheat['time'][:10]} ({cheat['volume_ratio']}x volume), below the IPO base pivot {rec['pivot']}.")
+    if retest is not None:
+        rec["explanation"].append(f"Retest held: the low came back to within {cfg.retest_zone_pct} % of the pivot on {retest['time'][:10]} and the close stayed above it.")
+    rec["explanation"].append(f"IPO low {ipo_low_info['ipo_low']} (lowest low of the first {cfg.discovery_bars} sessions): " + (f"broken - first close below on {ipo_low_info['first_close_below'][:10]}." if ipo_low_info["first_close_below"] else "never closed below."))
     rec["geometry"] = _geometry(listing, discovery, base_out, pivot, breakout, failure, times, t, c)
     return rec
 
@@ -332,7 +386,7 @@ def _geometry(listing, discovery, base, pivot, breakout, failure, times, t, c) -
 def _explain(r: dict[str, Any], cfg: IPOConfig) -> list[str]:
     out = [f"Status: {r['status_label']}" + (f" - {r['status_reason']}" if r.get("status_reason") else "") + "."]
     lst = r["listing"]
-    out.append(f"Listed {lst['date']} ({'official NSE equity list' if lst['source'] == 'nse_equity_list' else 'first candle of the provider history - fallback, check the listing date'}); {r['age_bars']} completed sessions since.")
+    out.append(f"Listed {lst['date']} ({'official NSE listing date' if lst['source'] == 'nse_equity_list' else 'first candle of the provider history - fallback, check the listing date'}); {r['age_bars']} completed sessions since.")
     d = r["discovery"]
     out.append(f"Discovery period: first {d['bars']} sessions, high {d['high']}, low {d['low']}.")
     b = r.get("base")
