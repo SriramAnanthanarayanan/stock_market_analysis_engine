@@ -45,6 +45,8 @@ export interface ChartDebugInfo {
   lineLast: { t: number; v: number } | null;
   volumeHighlights: number;
   overlayKinds: Record<string, number>;
+  /** Text labels on overlays / markers drawn (prefs.showLabels). */
+  labels: boolean;
   /** Pixel position of every drawing anchor (id -> [x, y][]) through the drawing layer's mapper. */
   anchorPixels: () => Record<string, (number | null)[][]>;
 }
@@ -91,6 +93,7 @@ export const chartDebug: ChartDebugInfo = {
   lineLast: null,
   volumeHighlights: 0,
   overlayKinds: {},
+  labels: true,
   anchorPixels: () => ({}),
 };
 

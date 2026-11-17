@@ -44,3 +44,9 @@ body {
     font-variant-numeric: tabular-nums;
   }
 }
+
+/* The row whose chart is open in the preview (Space / Shift+Space step through the table). */
+tr[data-chart-current] {
+  background-color: rgba(25, 195, 218, 0.12);
+  box-shadow: inset 3px 0 0 #19c3da;
+}

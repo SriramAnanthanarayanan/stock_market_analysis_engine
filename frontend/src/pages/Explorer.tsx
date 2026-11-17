@@ -14,6 +14,7 @@ import { VcpPanel } from "../components/VcpPanel";
 import { ErrorNote, FnoBadge, KV, Panel, QualityCell, StatusBadge } from "../components/common";
 import { fmtBarTime, fmtNum, fmtPct, humanize } from "../lib/format";
 import { CATEGORY_LABELS } from "../lib/status";
+import { useChartKey } from "../lib/chartNav";
 
 type Toggles = { overlay: boolean; swings: boolean; sr: boolean };
 
@@ -282,6 +283,7 @@ export function ExplorerView(props: ExplorerViewProps) {
     [data],
   );
   const term = useChartTerminal("stock", termSrc, props.show);
+  useChartKey("h", term.toggleClean); // H: hide every overlay / bring them back
   const chartShapes = useMemo(
     () => [...(labelOpen ? labelPreview : []), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes, ...term.multiYearOverlay.shapes],
     [labelOpen, labelPreview, term.stageOverlay, term.vcpOverlay, term.ipoOverlay, term.multiYearOverlay],
@@ -409,6 +411,8 @@ export function ExplorerView(props: ExplorerViewProps) {
             onExportDrawings={term.actions.onExportDrawings}
             onImportDrawings={term.actions.onImportDrawings}
             dailyOnlyNote={timeframe !== "1d"}
+            clean={term.clean}
+            onToggleClean={term.toggleClean}
           />
         </div>
         <div className="w-full">

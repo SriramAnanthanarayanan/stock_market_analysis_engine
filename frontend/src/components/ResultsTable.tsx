@@ -3,7 +3,7 @@ import type { Match, PatternInfo, StatusSlug } from "../api/types";
 import { fmtBarTime, fmtNum } from "../lib/format";
 import { CATEGORY_LABELS, STATUS_META, STATUS_ORDER } from "../lib/status";
 import { FnoBadge, QualityCell, StatusBadge } from "./common";
-import { SymbolButton } from "../lib/openChart";
+import { setChartAnchor, SymbolButton } from "../lib/openChart";
 
 export interface Filters {
   pattern: string;
@@ -157,7 +157,7 @@ export function ResultsTable({ rows, onOpen, loading }: { rows: Match[]; onOpen:
     setPage(0);
   };
   return (
-    <section className={`panel overflow-hidden transition-opacity ${loading ? "opacity-60" : ""}`} data-testid="results">
+    <section className={`panel overflow-hidden transition-opacity ${loading ? "opacity-60" : ""}`} data-testid="results" data-chart-nav-table="" data-chart-nav-offset={current * PAGE} data-chart-nav-total={sorted.length}>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1100px] text-left text-xs">
           <thead className="bg-panel2 text-[11px] uppercase tracking-wide text-muted">
@@ -175,7 +175,10 @@ export function ResultsTable({ rows, onOpen, loading }: { rows: Match[]; onOpen:
               <tr
                 key={`${m.scan_id}-${m.pattern_id}`}
                 className="cursor-pointer border-t border-line/60 hover:bg-panel2"
-                onClick={() => onOpen(m)}
+                onClick={(e) => {
+                  setChartAnchor(e.currentTarget.querySelector("[data-chart-nav]"));
+                  onOpen(m);
+                }}
                 data-testid="result-row"
                 data-symbol={m.symbol}
                 data-pattern={m.pattern}
@@ -221,10 +224,10 @@ export function ResultsTable({ rows, onOpen, loading }: { rows: Match[]; onOpen:
           {sorted.length} detections {sorted.length > PAGE ? `- page ${current + 1} of ${pages}` : ""}
         </span>
         <span className="flex gap-1">
-          <button className="btn h-7" disabled={current === 0} onClick={() => setPage(current - 1)}>
+          <button className="btn h-7" disabled={current === 0} onClick={() => setPage(current - 1)} data-chart-nav-page="prev">
             Prev
           </button>
-          <button className="btn h-7" disabled={current >= pages - 1} onClick={() => setPage(current + 1)}>
+          <button className="btn h-7" disabled={current >= pages - 1} onClick={() => setPage(current + 1)} data-chart-nav-page="next">
             Next
           </button>
         </span>

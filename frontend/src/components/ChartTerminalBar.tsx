@@ -53,6 +53,9 @@ interface Props {
   onExportDrawings: () => void;
   onImportDrawings: (file: File) => void;
   dailyOnlyNote?: boolean;
+  /** "Hide all" overlays is on (lib/chartLayers.ts); with onToggleClean the bar shows the button. */
+  clean?: boolean;
+  onToggleClean?: () => void;
 }
 
 export function ChartTerminalBar(p: Props) {
@@ -146,7 +149,7 @@ export function ChartTerminalBar(p: Props) {
                 </select>
               </div>
               <div className="mt-2 flex justify-between border-t border-line pt-2">
-                <button className="text-accent hover:underline" onClick={() => setPrefs({ ...DEFAULT_PREFS, emas: DEFAULT_EMAS.map((e) => ({ ...e })) })}>
+                <button className="text-accent hover:underline" onClick={() => setPrefs({ ...DEFAULT_PREFS, emas: DEFAULT_EMAS.map((e) => ({ ...e })), hiddenByUser: [], cleanSnapshot: null })}>
                   Restore all chart defaults
                 </button>
                 <button className="btn h-7" onClick={() => setOpen(false)}>
@@ -195,6 +198,15 @@ export function ChartTerminalBar(p: Props) {
         <button className={chip(!!prefs.showMultiYear)} onClick={() => set({ showMultiYear: !prefs.showMultiYear })} title="Multi-year breakouts of the stock's history: the resistance line from the base start and the breakout candle (daily detector; shown on 1D and longer timeframes)" data-testid="toggle-multiyear">
           Multi-year
         </button>
+        <span className="mx-1 h-5 w-px bg-line" />
+        <button className={chip(prefs.showLabels !== false)} onClick={() => set({ showLabels: prefs.showLabels === false })} title="Text on the chart (10D high, T1 32%, Pivot, ...). Off: lines and arrows stay, the text goes. Your drawings keep their text." data-testid="toggle-labels">
+          Labels
+        </button>
+        {p.onToggleClean && (
+          <button className={chip(!!p.clean)} onClick={p.onToggleClean} title="Hide every overlay at once (H); press again to bring them back. Volume and your drawings stay." data-testid="toggle-clean">
+            {p.clean ? "Show all (H)" : "Hide all (H)"}
+          </button>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <div className="flex gap-1" role="group" aria-label="Drawing tools">

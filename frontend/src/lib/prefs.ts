@@ -34,6 +34,12 @@ export interface ChartPrefs {
   logScale: boolean; // logarithmic price axis (long histories)
   chartType?: "candle" | "line"; // candlesticks or a line of closes (same data, same drawings)
   indicatorsIncludePartial?: boolean; // 1W / multi-month: EMA/RSI/ATR also on the running (incomplete) period
+  // Decluttering (lib/chartLayers.ts)
+  showPattern?: boolean; // geometry of the detected pattern in the chart preview
+  showContext?: boolean; // levels / markers of the scanner row the preview was opened from
+  showLabels?: boolean; // text on overlays and markers (lines and arrows stay; drawings keep their text)
+  hiddenByUser?: string[]; // layers the user switched off: a scanner row no longer switches them on
+  cleanSnapshot?: Record<string, boolean> | null; // "Hide all" is on: the layers "Show all" brings back
 }
 
 export const DEFAULT_EMAS: EmaPref[] = [
@@ -70,6 +76,11 @@ export const DEFAULT_PREFS: ChartPrefs = {
   logScale: false,
   chartType: "candle",
   indicatorsIncludePartial: false,
+  showPattern: true,
+  showContext: true,
+  showLabels: true,
+  hiddenByUser: [],
+  cleanSnapshot: null,
 };
 
 const PREFS_KEY = "pas.chartPrefs.v1";
@@ -95,9 +106,11 @@ function write(key: string, value: unknown): boolean {
 }
 
 function sanitize(p: Partial<ChartPrefs> | null): ChartPrefs {
-  if (!p || p.v !== 1) return { ...DEFAULT_PREFS, emas: DEFAULT_EMAS.map((e) => ({ ...e })) };
+  if (!p || p.v !== 1) return { ...DEFAULT_PREFS, emas: DEFAULT_EMAS.map((e) => ({ ...e })), hiddenByUser: [] };
   const emas = Array.isArray(p.emas) && p.emas.length ? p.emas.filter((e) => Number.isInteger(e.period) && e.period >= 1 && e.period <= 400).slice(0, 10) : DEFAULT_EMAS;
-  return { ...DEFAULT_PREFS, ...p, emas: emas.map((e) => ({ ...e })) };
+  const hiddenByUser = Array.isArray(p.hiddenByUser) ? p.hiddenByUser.filter((k) => typeof k === "string") : [];
+  const snap = p.cleanSnapshot && typeof p.cleanSnapshot === "object" ? p.cleanSnapshot : null;
+  return { ...DEFAULT_PREFS, ...p, emas: emas.map((e) => ({ ...e })), hiddenByUser, cleanSnapshot: snap };
 }
 
 export function loadPrefs(): ChartPrefs {

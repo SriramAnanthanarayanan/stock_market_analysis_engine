@@ -711,7 +711,8 @@ export function PatternChart(props: PatternChartProps) {
       techRoles.extra_marker = (techRoles.extra_marker ?? 0) + 1;
     }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
-    markersRef.current.setMarkers(markers);
+    const labels = prefs.showLabels !== false; // "Text labels" off: arrows / lines stay, their text goes
+    markersRef.current.setMarkers(labels ? markers : markers.map((m) => ({ ...m, text: undefined })));
     if (extraShapes?.length) {
       // Page overlays may carry daily times (VCP / IPO / multi-year geometry, context levels): on a
       // weekly or multi-month chart each time moves to the bar containing it; a start before the
@@ -728,8 +729,9 @@ export function PatternChart(props: PatternChartProps) {
         } else shapes.push({ ...x, points: x.points.map((pt) => ({ ...pt, t: snap(pt.t) ?? pt.t })) });
       }
     }
-    overlayRef.current.setShapes(shapes);
+    overlayRef.current.setShapes(labels ? shapes : shapes.map((s) => ({ ...s, label: undefined })));
     subRef.current.rsiOverlay?.setShapes(rsiShapes);
+    chartDebug.labels = labels;
     chartDebug.lineSeries = linesRef.current.length;
     chartDebug.markers = markers.length;
     chartDebug.markerRoles = roles;
@@ -739,7 +741,7 @@ export function PatternChart(props: PatternChartProps) {
     chartDebug.detectionId = detection?.pattern_id ?? null;
     reapplyView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detection, showOverlay, showSwings, swings, candles, zones, showZones, extraShapes, props.extraMarkers, tech, prefs.showMarubozu, prefs.showBreakouts, prefs.showDailyLevels, prefs.showDivergence, timeframe, indicators, prefs.showRsi, partial?.t]);
+  }, [detection, showOverlay, showSwings, swings, candles, zones, showZones, extraShapes, props.extraMarkers, tech, prefs.showMarubozu, prefs.showBreakouts, prefs.showDailyLevels, prefs.showDivergence, prefs.showLabels, timeframe, indicators, prefs.showRsi, partial?.t]);
 
   // ---- manual drawings (separate primitive; never touches detector geometry)
   const drawings = props.drawings ?? [];

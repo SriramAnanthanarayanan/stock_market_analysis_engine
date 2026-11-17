@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { ChartResponse, IndexChart } from "../api/types";
@@ -7,14 +7,38 @@ import { PatternChart, type ChartMarker } from "../charts/PatternChart";
 import { useChartTerminal } from "../charts/useChartTerminal";
 import { fmtBarTime, fmtNum, fmtPct } from "../lib/format";
 import { ChartOpenerProvider, explorerUrl, type ChartRequest } from "../lib/openChart";
+import { isTyping, locateChart, markChartRow, stepChart, useChartKey } from "../lib/chartNav";
 import { CHART_TIMEFRAMES, isMultiMonth, type ChartTimeframe } from "../lib/timeframes";
 import { ExplorerView, PerformanceStrip } from "../pages/Explorer";
 import { ChartTerminalBar } from "./ChartTerminalBar";
+import { LayersMenu } from "./LayersMenu";
 import { ErrorNote, FnoBadge, KV } from "./common";
 
 const PREVIEW_CANDLES = 600;
 
 type Loaded = { kind: "stock"; data: ChartResponse } | { kind: "index"; data: IndexChart };
+
+/** Position of the open chart in the results table it came from. */
+interface ChartNavInfo {
+  row: number;
+  total: number;
+}
+
+function NavButtons({ nav, onStep }: { nav: ChartNavInfo; onStep: (dir: 1 | -1) => void }) {
+  return (
+    <>
+      <button className="btn h-7 px-2" onClick={() => onStep(-1)} disabled={nav.row <= 1} title="Previous stock in the list (Shift+Space)" data-testid="preview-prev">
+        ◀
+      </button>
+      <span className="num min-w-[64px] text-center text-[11px] text-muted" title="Row of this chart in the list. Space: next stock, Shift+Space: previous" data-testid="preview-nav-pos">
+        {nav.row} / {nav.total}
+      </span>
+      <button className="btn h-7 px-2" onClick={() => onStep(1)} disabled={nav.row >= nav.total} title="Next stock in the list (Space)" data-testid="preview-next">
+        ▶
+      </button>
+    </>
+  );
+}
 
 /** One shared chart preview for every results table (docs/chart-preview.md).
  *  Clicking a symbol opens it in a right-side drawer over the page; the page
@@ -25,18 +49,59 @@ type Loaded = { kind: "stock"; data: ChartResponse } | { kind: "index"; data: In
 export function ChartPreviewHost({ children }: { children: ReactNode }) {
   const [req, setReq] = useState<ChartRequest | null>(null);
   const [full, setFull] = useState(false);
+  const [nav, setNav] = useState<ChartNavInfo | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  // A timeframe the user picked in the preview is kept while stepping through the list.
+  const tfOverride = useRef<ChartTimeframe | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const open = useCallback((r: ChartRequest) => {
-    setReq(r);
+    const tf = tfOverride.current;
+    setReq(tf && tf !== r.timeframe ? { ...r, timeframe: tf, patternId: null } : r);
   }, []);
   useEffect(() => {
     setReq(null);
     setFull(false);
   }, [location.pathname]);
+  // Where the open chart sits in its results table: counter, highlighted row.
+  useEffect(() => {
+    if (!req) {
+      tfOverride.current = null;
+      markChartRow(null);
+      setNav(null);
+      return;
+    }
+    const pos = locateChart(req.symbol);
+    markChartRow(pos);
+    setNav(pos ? { row: pos.row, total: pos.total } : null);
+  }, [req]);
+  const noteTimer = useRef<number | undefined>(undefined);
+  const flash = useCallback((m: string) => {
+    setNote(m);
+    window.clearTimeout(noteTimer.current);
+    noteTimer.current = window.setTimeout(() => setNote(null), 2500);
+  }, []);
+  const step = useCallback(
+    (dir: 1 | -1) => {
+      if (!req) return;
+      const msg = stepChart(req.symbol, dir);
+      if (msg) flash(msg);
+    },
+    [req, flash],
+  );
   useEffect(() => {
     if (!req) return;
     const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === " ") {
+        // Space: next stock of the list, Shift+Space: previous (lib/chartNav.ts).
+        if (ev.ctrlKey || ev.altKey || ev.metaKey || isTyping(ev.target)) return;
+        ev.preventDefault(); // no page scroll, no click on a focused button
+        if (ev.repeat) return;
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active.tagName === "BUTTON") active.blur();
+        step(ev.shiftKey ? -1 : 1);
+        return;
+      }
       if (ev.key !== "Escape") return;
       const target = ev.target as HTMLElement | null;
       if (target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
@@ -49,15 +114,31 @@ export function ChartPreviewHost({ children }: { children: ReactNode }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [req, full]);
-  const setTf = (tf: ChartTimeframe) => req && setReq({ ...req, timeframe: tf, patternId: tf === req.timeframe ? req.patternId : null });
+  }, [req, full, step]);
+  const setTf = (tf: ChartTimeframe) => {
+    if (!req) return;
+    tfOverride.current = tf;
+    setReq({ ...req, timeframe: tf, patternId: tf === req.timeframe ? req.patternId : null });
+  };
   return (
     <ChartOpenerProvider value={open}>
       {children}
+      {req && note && (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-md border border-accent/50 bg-panel px-3 py-1.5 text-xs text-ink shadow-xl" data-testid="preview-nav-note">
+          {note}
+        </div>
+      )}
+      {req && full && nav && (
+        <div className="fixed left-1/2 top-7 z-[60] flex -translate-x-1/2 items-center gap-1 rounded-md border border-line bg-panel px-2 py-1 text-xs shadow-xl" title="Space: next stock, Shift+Space: previous">
+          <NavButtons nav={nav} onStep={step} />
+        </div>
+      )}
       {req && !full && (
         <PreviewDrawer
           key={`${req.instrument ?? "stock"}:${req.symbol}`}
           req={req}
+          nav={nav}
+          onStep={step}
           onClose={() => setReq(null)}
           onTimeframe={setTf}
           onExpand={() => {
@@ -97,7 +178,23 @@ function contextMarkers(req: ChartRequest): ChartMarker[] {
   return (req.context?.markers ?? []).map((m) => ({ t: m.t, position: m.position ?? "below", shape: m.position === "above" ? "arrowDown" : "arrowUp", color: m.color ?? "#95EB45", text: m.label }));
 }
 
-function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { req: ChartRequest; onClose: () => void; onExpand: () => void; onOpenPage: () => void; onTimeframe: (tf: ChartTimeframe) => void }) {
+function PreviewDrawer({
+  req,
+  nav,
+  onStep,
+  onClose,
+  onExpand,
+  onOpenPage,
+  onTimeframe,
+}: {
+  req: ChartRequest;
+  nav: ChartNavInfo | null;
+  onStep: (dir: 1 | -1) => void;
+  onClose: () => void;
+  onExpand: () => void;
+  onOpenPage: () => void;
+  onTimeframe: (tf: ChartTimeframe) => void;
+}) {
   const instrument = req.instrument ?? "stock";
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -134,8 +231,17 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
   const firstT = candles[0]?.t ?? null;
   const lastT = last?.t ?? null;
   const vcp = term.vcp;
-  const shapes = useMemo(() => [...contextShapes(req, firstT, lastT), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes, ...term.multiYearOverlay.shapes], [req, firstT, lastT, term.stageOverlay, term.vcpOverlay, term.ipoOverlay, term.multiYearOverlay]);
-  const markers = useMemo(() => [...contextMarkers(req), ...term.vcpOverlay.markers, ...term.ipoOverlay.markers, ...term.multiYearOverlay.markers], [req, term.vcpOverlay, term.ipoOverlay, term.multiYearOverlay]);
+  const showContext = term.prefs.showContext !== false;
+  const shapes = useMemo(() => [...(showContext ? contextShapes(req, firstT, lastT) : []), ...term.stageOverlay.shapes, ...term.vcpOverlay.shapes, ...term.ipoOverlay.shapes, ...term.multiYearOverlay.shapes], [req, showContext, firstT, lastT, term.stageOverlay, term.vcpOverlay, term.ipoOverlay, term.multiYearOverlay]);
+  const markers = useMemo(() => [...(showContext ? contextMarkers(req) : []), ...term.vcpOverlay.markers, ...term.ipoOverlay.markers, ...term.multiYearOverlay.markers], [req, showContext, term.vcpOverlay, term.ipoOverlay, term.multiYearOverlay]);
+  // Layers with nothing to draw on this chart (greyed in the Layers menu).
+  const missing = useMemo(() => {
+    const m = new Set<string>();
+    if (!det) m.add("pattern");
+    if (!req.context?.levels?.length && !req.context?.markers?.length) m.add("context");
+    return m;
+  }, [det, req.context]);
+  useChartKey("h", term.toggleClean); // H: hide every overlay / bring them back
   const volumeHighlights = useMemo(() => [...term.vcpOverlay.volume, ...term.ipoOverlay.volume], [term.vcpOverlay, term.ipoOverlay]);
   const focusT = vcp?.vcp?.geometry?.base.t_start ?? term.ipo?.geometry?.listing.t ?? req.context?.focusT ?? req.context?.markers?.[0]?.t ?? null;
   const name = loaded?.kind === "index" ? loaded.data.name : loaded?.kind === "stock" ? loaded.data.company : null;
@@ -162,6 +268,11 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
           <div className="text-[10px] text-muted">{last ? `close ${fmtBarTime(last.t, req.timeframe === "1h" || req.timeframe === "4h" ? "1h" : "1d")}` : ""}</div>
         </div>
         <div className="ml-auto flex items-center gap-1">
+          {nav && (
+            <span className="mr-2 flex items-center gap-1">
+              <NavButtons nav={nav} onStep={onStep} />
+            </span>
+          )}
           <button className="btn h-7" onClick={onExpand} title="Open the full charting terminal (fullscreen); close it to come back here" data-testid="preview-expand">
             ⤢ Expand
           </button>
@@ -193,6 +304,20 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
           <button className={`chip h-6 ${term.prefs.showVolume ? "chip-on" : ""}`} onClick={() => term.setPrefs({ ...term.prefs, showVolume: !term.prefs.showVolume })}>
             Volume
           </button>
+          <span className="mx-1 h-4 w-px bg-line" />
+          <LayersMenu prefs={term.prefs} setPrefs={term.setPrefs} clean={term.clean} onToggleClean={term.toggleClean} forced={term.forced} missing={missing} />
+          <button
+            className={`chip h-6 ${term.prefs.showLabels !== false ? "chip-on" : ""}`}
+            onClick={() => term.setPrefs({ ...term.prefs, showLabels: term.prefs.showLabels === false })}
+            title="Text on the chart (10D high, T1 32%, Pivot, ...). Off: lines and arrows stay, the text goes. Saved in this browser."
+            data-testid="preview-labels"
+          >
+            Labels
+          </button>
+          <button className={`chip h-6 ${term.clean ? "chip-on" : ""}`} onClick={term.toggleClean} title="Hide every overlay at once (H); press again to bring them back. Volume and your drawings stay." data-testid="preview-clean">
+            {term.clean ? "Show all (H)" : "Hide all (H)"}
+          </button>
+          <span className="mx-1 h-4 w-px bg-line" />
           {!isMultiMonth(req.timeframe) && (
             <button className={`chip h-6 ${showZones ? "chip-on" : ""}`} onClick={() => setShowZones((x) => !x)} data-testid="preview-sr">
               S/R
@@ -244,6 +369,8 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
               onExportDrawings={term.actions.onExportDrawings}
               onImportDrawings={term.actions.onImportDrawings}
               dailyOnlyNote={req.timeframe !== "1d"}
+              clean={term.clean}
+              onToggleClean={term.toggleClean}
             />
           </div>
         )}
@@ -262,7 +389,7 @@ function PreviewDrawer({ req, onClose, onExpand, onOpenPage, onTimeframe }: { re
               timeframe={data.timeframe}
               detection={det}
               swings={[]}
-              showOverlay
+              showOverlay={term.prefs.showPattern !== false}
               showSwings={false}
               showVolume={term.prefs.showVolume}
               zones={zones}

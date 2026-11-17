@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { setChartAnchor } from "../lib/openChart";
 
 export interface Column<T> {
   key: string;
@@ -31,7 +32,7 @@ export function DataTable<T>({ rows, columns, onRow, testid, empty, pageSize = 5
   const cur = Math.min(page, pages - 1);
   const shown = sorted.slice(cur * pageSize, (cur + 1) * pageSize);
   return (
-    <div className="panel overflow-hidden">
+    <div className="panel overflow-hidden" data-chart-nav-table="" data-chart-nav-offset={cur * pageSize} data-chart-nav-total={sorted.length}>
       <div className="overflow-x-auto">
         <table className="w-full text-xs" data-testid={testid}>
           <thead className="bg-panel2 text-muted">
@@ -51,7 +52,16 @@ export function DataTable<T>({ rows, columns, onRow, testid, empty, pageSize = 5
           </thead>
           <tbody>
             {shown.map((r, i) => (
-              <tr key={i} className={`border-t border-line/50 ${onRow ? "cursor-pointer hover:bg-panel2" : ""}`} onClick={() => onRow?.(r)} data-testid={`${testid}-row`}>
+              <tr
+                key={i}
+                className={`border-t border-line/50 ${onRow ? "cursor-pointer hover:bg-panel2" : ""}`}
+                onClick={(e) => {
+                  if (!onRow) return;
+                  setChartAnchor(e.currentTarget.querySelector("[data-chart-nav]"));
+                  onRow(r);
+                }}
+                data-testid={`${testid}-row`}
+              >
                 {columns.map((c) => (
                   <td key={c.key} className={`whitespace-nowrap px-2 py-1.5 ${c.align === "right" ? "num text-right" : ""}`}>
                     {c.render(r)}
@@ -65,13 +75,13 @@ export function DataTable<T>({ rows, columns, onRow, testid, empty, pageSize = 5
       {!rows.length && <div className="px-3 py-6 text-center text-xs text-muted">{empty}</div>}
       {pages > 1 && (
         <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-1.5 text-xs text-muted">
-          <button className="chip h-6" disabled={cur === 0} onClick={() => setPage(cur - 1)}>
+          <button className="chip h-6" disabled={cur === 0} onClick={() => setPage(cur - 1)} data-chart-nav-page="prev">
             Prev
           </button>
           <span>
             Page {cur + 1} / {pages} ({sorted.length} rows)
           </span>
-          <button className="chip h-6" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>
+          <button className="chip h-6" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)} data-chart-nav-page="next">
             Next
           </button>
         </div>

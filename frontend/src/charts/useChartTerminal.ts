@@ -5,6 +5,7 @@ import type { OverlayShape } from "./OverlayPrimitive";
 import { ipoApi, multiYearApi, vcpApi, type IpoRow, type MultiYearEvent, type VcpSymbol } from "../api/advanced";
 import { ipoMarkers, ipoShapes, ipoVolume, multiYearMarkers, multiYearShapes, vcpMarkers, vcpShapes, vcpVolume } from "./vcpOverlay";
 import { loadLayout, loadPrefs, newId, saveLayout, savePrefs, type ChartPrefs } from "../lib/prefs";
+import { effectivePrefs, forcedLayers, hideAll, prefsToSave, showAll } from "../lib/chartLayers";
 import { drawingsApi } from "../api/advanced";
 import { useDrawingStore } from "../lib/drawingStore";
 import { defaultFibSettings } from "./fib";
@@ -25,36 +26,20 @@ interface Source {
 /** State shared by every chart page (stock and index explorers): personal
  *  preferences, drawings, backend indicator series and technical overlays. */
 export function useChartTerminal(chartId: string, src: Source | null, showParam?: string | null) {
-  const [prefs, setPrefsState] = useState<ChartPrefs>(() => loadPrefs());
-  const setPrefs = useCallback((p: ChartPrefs) => {
-    setPrefsState(p);
+  // Saved preferences (this browser) and the layers drawn. "?show=rsi,marubozu,..."
+  // from a scanner row switches those layers on for this chart only: the override
+  // is never written to the saved preferences, and a layer the user hid stays
+  // hidden (lib/chartLayers.ts).
+  const [saved, setSavedState] = useState<ChartPrefs>(() => loadPrefs());
+  const setSaved = useCallback((p: ChartPrefs) => {
+    setSavedState(p);
     savePrefs(p);
   }, []);
-  // "?show=rsi,marubozu,..." from a scanner row enables those overlays for this
-  // chart only: the override is not written to the saved preferences, so opening a
-  // preview from a scanner never changes the user's default chart layout.
-  useEffect(() => {
-    if (!showParam) return;
-    const s = new Set(showParam.split(","));
-    setPrefsState((p) => {
-      const next = {
-        ...p,
-        showRsi: p.showRsi || s.has("rsi") || s.has("divergence"),
-        showAtr: p.showAtr || s.has("atr"),
-        showMarubozu: p.showMarubozu || s.has("marubozu"),
-        showDailyLevels: p.showDailyLevels || s.has("levels"),
-        showBreakouts: p.showBreakouts || s.has("breakouts"),
-        showDivergence: p.showDivergence || s.has("divergence"),
-        showRsLine: p.showRsLine || s.has("rs"),
-        showStage: p.showStage || s.has("stage"),
-        showVcp: p.showVcp || s.has("vcp"),
-        showIpo: p.showIpo || s.has("ipo"),
-        showMultiYear: p.showMultiYear || s.has("multiyear"),
-        emas: s.has("ema") ? p.emas.map((e) => ({ ...e, visible: e.visible || [20, 50, 200].includes(e.period) })) : p.emas,
-      };
-      return next;
-    });
-  }, [showParam]);
+  const forced = useMemo(() => forcedLayers(showParam), [showParam]);
+  const prefs = useMemo(() => effectivePrefs(saved, forced), [saved, forced]);
+  const setPrefs = useCallback((p: ChartPrefs) => setSaved(prefsToSave(p, prefs, saved, forced)), [setSaved, prefs, saved, forced]);
+  const clean = !!saved.cleanSnapshot;
+  const toggleClean = useCallback(() => setSaved(saved.cleanSnapshot ? showAll(saved) : hideAll(saved)), [setSaved, saved]);
 
   const [tool, setTool] = useState<DrawTool>("none");
   const [drawStyle, setDrawStyle] = useState<DrawStyle>({ color: "#19C3DA", width: 2, line_style: "solid" });
@@ -259,11 +244,11 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
 
   const actions = {
     onFit: () => setFitKey((x) => x + 1),
-    onSaveLayout: () => flash(saveLayout(prefs, handle.current?.paneStretch() ?? []) ? "Layout saved in this browser." : "Could not save: browser storage unavailable."),
+    onSaveLayout: () => flash(saveLayout(saved, handle.current?.paneStretch() ?? []) ? "Layout saved in this browser." : "Could not save: browser storage unavailable."),
     onRestoreLayout: () => {
       const l = loadLayout();
       if (!l) return flash("No saved layout yet.");
-      setPrefs(l.prefs);
+      setSaved(l.prefs);
       window.setTimeout(() => handle.current?.setPaneStretch(l.paneStretch), 150);
       flash(`Layout restored (saved ${new Date(l.savedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}).`);
     },
@@ -291,6 +276,9 @@ export function useChartTerminal(chartId: string, src: Source | null, showParam?
   return {
     prefs,
     setPrefs,
+    clean,
+    toggleClean,
+    forced,
     tool,
     setTool,
     drawStyle,

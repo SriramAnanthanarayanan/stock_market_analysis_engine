@@ -53,6 +53,16 @@ export function useOpenChart(): Opener {
   return ctx ?? fallback;
 }
 
+// The symbol button (in a results table) the open chart came from: Space /
+// Shift+Space in the preview step to the next / previous one (lib/chartNav.ts).
+let navAnchor: HTMLElement | null = null;
+export function setChartAnchor(el: Element | null | undefined) {
+  navAnchor = el instanceof HTMLElement ? el : null;
+}
+export function chartAnchor(): HTMLElement | null {
+  return navAnchor;
+}
+
 /** Clickable symbol for every results table: opens the chart preview without
  *  leaving the page (row clicks are not triggered twice). */
 export function SymbolButton({ symbol, onOpen, testid = "symbol-link" }: { symbol: string; onOpen: () => void; testid?: string }) {
@@ -62,11 +72,13 @@ export function SymbolButton({ symbol, onOpen, testid = "symbol-link" }: { symbo
       className="font-semibold text-ink underline decoration-accent/40 decoration-dotted underline-offset-2 hover:text-accent"
       onClick={(e) => {
         e.stopPropagation();
+        setChartAnchor(e.currentTarget);
         onOpen();
       }}
       title={`Open the ${symbol} chart preview`}
       data-testid={testid}
       data-symbol={symbol}
+      data-chart-nav=""
     >
       {symbol}
     </button>

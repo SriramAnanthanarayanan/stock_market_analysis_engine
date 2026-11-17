@@ -10,6 +10,7 @@ import { ErrorNote, KV, Panel } from "../components/common";
 import { RRGChart } from "../components/RRGChart";
 import { DataSourcePanel, TechnicalPanel } from "../components/TechnicalPanel";
 import { StagePanel } from "../components/StagePanel";
+import { useChartKey } from "../lib/chartNav";
 import { fmtBarTime, fmtDate, fmtNum, humanize } from "../lib/format";
 
 export function IndexExplorer() {
@@ -51,6 +52,7 @@ export function IndexExplorer() {
   }, [code, benchmark, asof]);
   const src = useMemo(() => (data ? { symbol: data.code, timeframe: data.timeframe, asof: data.asof, scanId: null, candles: data.candles, instrument: "index" as const } : null), [data]);
   const term = useChartTerminal("index", src, params.get("show"));
+  useChartKey("h", term.toggleClean); // H: hide every overlay / bring them back
   const setTf = (tf: ChartTimeframe) => {
     const next = new URLSearchParams(params);
     next.set("tf", tf);
@@ -132,6 +134,8 @@ export function IndexExplorer() {
             onExportDrawings={term.actions.onExportDrawings}
             onImportDrawings={term.actions.onImportDrawings}
             dailyOnlyNote={timeframe !== "1d"}
+            clean={term.clean}
+            onToggleClean={term.toggleClean}
           />
         </div>
       </div>
