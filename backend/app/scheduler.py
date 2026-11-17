@@ -16,12 +16,20 @@ Schedules (initial defaults): 1H every 30 min, 4H every 2 h, 1D every 6 h,
   (15:30 + ``daily_settle_minutes`` + 1 = 16:01 IST by default) ticks 1D and 1W,
   so the new daily candle is downloaded right away rather than up to 6 hours
   later (the interval jobs are anchored to the moment the app started).
+* Sleep / hibernate: a job whose time passed while the computer slept still runs
+  once when it wakes (no misfire limit, coalesced), instead of being dropped.
+  Every job is idempotent: scans are gated by ``needs_scan``; the index, universe
+  and F&O refreshes only fetch what is missing. Windows timers do not count time
+  asleep, so a watchdog notices the wall-clock jump on wake and wakes the
+  scheduler at once (otherwise it would first finish its pre-sleep wait, up to
+  30 minutes).
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -41,16 +49,21 @@ log = logging.getLogger(__name__)
 INTERVALS = {"1h": {"minutes": 30}, "4h": {"hours": 2}, "1d": {"hours": 6}, "1w": {"days": 1}}
 STARTUP_ORDER = ("1d", "1w", "4h", "1h")
 SCHEDULED_UNIVERSE = "all"
+RESUME_CHECK_S = 60  # watchdog period
+RESUME_GAP_S = 180  # wall clock ahead of the watchdog by more than this = the computer slept
 
 
 class ScanScheduler:
     def __init__(self, services: "Services"):
         self.s = services
         self.scheduler = BackgroundScheduler(
-            timezone=IST, job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 600}
+            # misfire_grace_time None: a run missed while the computer slept is never dropped;
+            # coalesce: it runs once, however many runs were missed.
+            timezone=IST, job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": None}
         )
         self.last_decisions: dict[str, str] = {}
         self._startup_pending: list[str] = []
+        self._stop = threading.Event()
 
     def start(self, run_startup_scans: bool = True) -> None:
         if self.scheduler.running:
@@ -75,12 +88,31 @@ class ScanScheduler:
             self.fno_refresh, CronTrigger(day_of_week="mon-fri", hour="18-23", minute="5,35", timezone=IST), id="fno_bhavcopy", replace_existing=True
         )
         self.scheduler.start()
+        self._stop.clear()
+        threading.Thread(target=self._watch_resume, name="scheduler-resume-watch", daemon=True).start()
         if run_startup_scans:
             threading.Thread(target=self.startup_scans, name="startup-scans", daemon=True).start()
 
     def shutdown(self) -> None:
+        self._stop.set()
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
+
+    def _watch_resume(self, clock=time.time, period: float = RESUME_CHECK_S) -> None:
+        last = clock()
+        while not self._stop.wait(period):
+            now = clock()
+            if now - last > period + RESUME_GAP_S:
+                self.resumed(now - last)
+            last = now
+
+    def resumed(self, asleep_s: float) -> None:
+        """The computer woke up (wall clock jumped ahead): run the missed jobs now."""
+        msg = f"{now_ist():%Y-%m-%d %H:%M} computer resumed after ~{asleep_s / 60:.0f} min asleep: missed jobs run now"
+        self.last_decisions["resume"] = msg
+        log.info(msg)
+        if self.scheduler.running:
+            self.scheduler.wakeup()
 
     def fno_refresh(self) -> None:
         try:

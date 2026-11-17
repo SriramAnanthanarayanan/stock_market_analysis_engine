@@ -71,6 +71,46 @@ def test_after_close_job_ticks_daily_and_weekly_after_settle(services_env, monke
     assert ticked == ["1d", "1w"]
 
 
+def test_jobs_missed_while_asleep_run_on_wake(services_env):
+    """A run missed while the computer slept is never dropped (2026-11-17: the 16:01
+    after-close job was missed by 5 h and skipped, so the day's close never loaded)."""
+    import threading
+    from datetime import timedelta
+
+    s, _ = services_env
+    sch = ScanScheduler(s)
+    sch.start(run_startup_scans=False)
+    try:
+        for job in sch.scheduler.get_jobs():
+            assert job.misfire_grace_time is None and job.coalesce, job.id
+        ran = threading.Event()
+        five_hours_ago = datetime.now(IST) - timedelta(hours=5)
+        sch.scheduler.add_job(ran.set, "date", run_date=five_hours_ago, id="missed_probe")
+        assert ran.wait(5), "a job missed by 5 hours must still run once"
+    finally:
+        sch.shutdown()
+
+
+def test_resume_watchdog_wakes_the_scheduler(services_env, monkeypatch):
+    s, _ = services_env
+    sch = ScanScheduler(s)
+    woke = []
+    monkeypatch.setattr(sch.scheduler, "wakeup", lambda: woke.append(True))
+    monkeypatch.setattr(type(sch.scheduler), "running", property(lambda self: True))
+    times = iter([1000.0, 1000.05, 1000.05 + 5 * 3600])  # normal tick, then 5 h asleep
+
+    def clock():
+        t = next(times, None)
+        if t is None:
+            sch._stop.set()
+            return 1000.05 + 5 * 3600
+        return t
+
+    sch._watch_resume(clock=clock, period=0.01)
+    assert woke == [True]
+    assert "resumed after ~300 min" in sch.last_decisions["resume"]
+
+
 def test_scan_active_endpoint(client_env):
     client, s, _, _ = client_env
     r = client.get("/api/scan/active")
